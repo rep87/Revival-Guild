@@ -13,12 +13,14 @@ const CONFIG = {
   STAT_MIN: 1,
   STAT_MAX: 10,
   QUEST_SLOTS: 3,
+  QUEST_SPAWN_RATE: 0.6,
+  QUEST_VISIBLE_TURNS_MIN: 1,
+  QUEST_VISIBLE_TURNS_MAX: 4,
   QUEST_REWARD_MIN: 50,
   QUEST_REWARD_MAX: 200,
   QUEST_TURNS_MIN: 1,
   QUEST_TURNS_MAX: 3,
   RECRUIT_ONCE_PER_TURN: true,
-  MAX_ACTIVE_QUESTS: 1,
   ASSET_BG: 'assets/bg/medieval.jpg',
   ASSET_MERC: (mercId) => `assets/mercs/${mercId}.jpg`,
   ASSET_DUNGEON_THUMB: 'assets/monsters/dungeon.jpg',
@@ -62,6 +64,7 @@ const elements = {
   assetNote: document.getElementById('asset-note'),
   recruitBtn: document.getElementById('recruit-btn'),
   newTurnBtn: document.getElementById('new-turn-btn'),
+  questSpawnRate: document.getElementById('quest-spawn-rate'),
   modalOverlay: document.getElementById('modal-overlay'),
   modal: document.getElementById('modal-content'),
   modalTitle: document.getElementById('modal-title'),
@@ -118,6 +121,7 @@ function bindEvents() {
  */
 function load() {
   const stored = localStorage.getItem(STORAGE_KEY);
+  let loadedFromStorage = false;
   if (stored) {
     try {
       const parsed = JSON.parse(stored);
@@ -135,25 +139,30 @@ function load() {
         lastRecruitTurn: typeof parsed.lastRecruitTurn === 'number' ? parsed.lastRecruitTurn : null,
         rivals: normalizedRivals
       };
-      ensureQuestSlots();
-      syncMercBusyFromQuests();
-      return;
+      loadedFromStorage = true;
     } catch (error) {
       console.warn('Failed to parse stored state, starting fresh.', error);
     }
   }
 
-  state = {
-    gold: CONFIG.START_GOLD,
-    turn: 1,
-    mercs: [],
-    quests: [],
-    log: [],
-    lastRecruitTurn: null,
-    rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival }))
-  };
+  if (!loadedFromStorage) {
+    state = {
+      gold: CONFIG.START_GOLD,
+      turn: 1,
+      mercs: [],
+      quests: [],
+      log: [],
+      lastRecruitTurn: null,
+      rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival }))
+    };
+  }
+
   ensureQuestSlots();
-  save();
+  if (!loadedFromStorage) {
+    spawnQuestsForEmptySlots(true);
+    save();
+  }
+  syncMercBusyFromQuests();
 }
 
 /**
@@ -337,8 +346,12 @@ function applyAssetFallbacks(list) {
 function newTurn() {
   state.turn += 1;
   const completionLogs = [];
+  const expirationLogs = [];
 
-  state.quests = state.quests.map((quest) => {
+  state.quests = (Array.isArray(state.quests) ? state.quests : []).map((quest) => {
+    if (!quest || quest.deleted || quest.status === 'empty') {
+      return createEmptyQuestSlot(quest);
+    }
     if (quest.status === 'in_progress') {
       const remaining = Math.max(0, (typeof quest.remaining_turns === 'number' ? quest.remaining_turns : quest.turns_cost) - 1);
       quest.remaining_turns = remaining;
@@ -352,9 +365,20 @@ function newTurn() {
     if (quest.status === 'bid_failed') {
       return generateQuest();
     }
-    return generateQuest();
+    if (quest.status === 'ready') {
+      const currentVisible = Math.round(Number(quest.remaining_visible_turns));
+      const nextVisible = Math.max(0, Number.isFinite(currentVisible) ? currentVisible - 1 : randomVisibleTurns() - 1);
+      quest.remaining_visible_turns = nextVisible;
+      if (nextVisible <= 0) {
+        expirationLogs.push(`[T${state.turn}] 퀘스트 ${quest.id}가 만료되었습니다.`);
+        return generateQuest();
+      }
+      return quest;
+    }
+    return quest;
   });
 
+  spawnQuestsForEmptySlots(false);
   ensureQuestSlots();
   syncMercBusyFromQuests();
   state.lastRecruitTurn = null;
@@ -362,6 +386,7 @@ function newTurn() {
 
   log(`[T${state.turn}] 새 턴이 시작되었습니다.`);
   completionLogs.forEach((message) => log(message));
+  expirationLogs.forEach((message) => log(message));
 
   save();
   render();
@@ -384,8 +409,40 @@ function generateQuest() {
     status: 'ready',
     remaining_turns: 0,
     assigned_merc_ids: [],
-    bids: generateQuestBids(reward)
+    bids: generateQuestBids(reward),
+    remaining_visible_turns: randomVisibleTurns(),
+    deleted: false
   };
+}
+
+function createEmptyQuestSlot(base = {}) {
+  return {
+    id: typeof base.id === 'string' ? base.id : `empty_${Math.random().toString(36).slice(2, 7)}`,
+    type: 'dungeon',
+    reward: 0,
+    turns_cost: 0,
+    req: { atk: 0, def: 0, stam: 0 },
+    status: 'empty',
+    remaining_turns: 0,
+    assigned_merc_ids: [],
+    bids: { player: undefined, rivals: [], winner: null },
+    remaining_visible_turns: 0,
+    deleted: true
+  };
+}
+
+function spawnQuestsForEmptySlots(force = false) {
+  const rate = Math.min(1, Math.max(0, Number(CONFIG.QUEST_SPAWN_RATE) || 0));
+  state.quests = (Array.isArray(state.quests) ? state.quests : []).map((quest) => {
+    const isEmpty = !quest || quest.deleted || quest.status === 'empty';
+    if (!isEmpty) {
+      return quest;
+    }
+    if (force || Math.random() < rate) {
+      return generateQuest();
+    }
+    return createEmptyQuestSlot(quest);
+  });
 }
 
 function generateQuestBids(reward) {
@@ -448,18 +505,40 @@ function finalizeQuest(quest) {
 
 /** Ensure quest slots are filled up to the configured amount. */
 function ensureQuestSlots() {
-  state.quests = state.quests
-    .slice(0, CONFIG.QUEST_SLOTS)
-    .map((quest) => {
-      if (!quest.bids) {
-        quest.bids = generateQuestBids(quest.reward);
-      } else {
-        quest.bids = normalizeQuestBids(quest.bids, quest.reward, state.rivals);
-      }
-      return quest;
-    });
+  const slots = Array.isArray(state.quests) ? state.quests.slice(0, CONFIG.QUEST_SLOTS) : [];
+  state.quests = slots.map((quest) => {
+    if (!quest || typeof quest !== 'object') {
+      return createEmptyQuestSlot();
+    }
+    if (quest.deleted || quest.status === 'empty') {
+      return createEmptyQuestSlot(quest);
+    }
+    if (!quest.req || typeof quest.req !== 'object') {
+      quest.req = generateQuestRequirements(quest.turns_cost || CONFIG.QUEST_TURNS_MIN);
+    }
+    if (!quest.bids) {
+      quest.bids = generateQuestBids(quest.reward);
+    } else {
+      quest.bids = normalizeQuestBids(quest.bids, quest.reward, state.rivals);
+    }
+    const visibleValue = Math.round(Number(quest.remaining_visible_turns));
+    if (quest.status === 'ready') {
+      quest.remaining_visible_turns = clamp(
+        Number.isFinite(visibleValue) && visibleValue > 0 ? visibleValue : randomVisibleTurns(),
+        CONFIG.QUEST_VISIBLE_TURNS_MIN,
+        Math.max(CONFIG.QUEST_VISIBLE_TURNS_MIN, CONFIG.QUEST_VISIBLE_TURNS_MAX)
+      );
+    } else {
+      quest.remaining_visible_turns = Math.max(0, Number.isFinite(visibleValue) ? visibleValue : 0);
+    }
+    if (!Array.isArray(quest.assigned_merc_ids)) {
+      quest.assigned_merc_ids = [];
+    }
+    quest.deleted = false;
+    return quest;
+  });
   while (state.quests.length < CONFIG.QUEST_SLOTS) {
-    state.quests.push(generateQuest());
+    state.quests.push(createEmptyQuestSlot());
   }
 }
 
@@ -477,7 +556,10 @@ function normalizeMerc(merc) {
 /** Normalize a quest object loaded from storage. */
 function normalizeQuest(quest, rivals = DEFAULT_RIVALS) {
   if (!quest || typeof quest !== 'object') {
-    return null;
+    return createEmptyQuestSlot();
+  }
+  if (quest.deleted || quest.status === 'empty') {
+    return createEmptyQuestSlot(quest);
   }
   const turns_cost = Math.max(CONFIG.QUEST_TURNS_MIN, Math.min(CONFIG.QUEST_TURNS_MAX, Number(quest.turns_cost) || CONFIG.QUEST_TURNS_MIN));
   const status = quest.status === 'in_progress'
@@ -514,6 +596,17 @@ function normalizeQuest(quest, rivals = DEFAULT_RIVALS) {
     normalized.remaining_turns = 0;
     normalized.assigned_merc_ids = [];
   }
+  const visibleValue = Math.round(Number(quest.remaining_visible_turns));
+  if (status === 'ready') {
+    normalized.remaining_visible_turns = clamp(
+      Number.isFinite(visibleValue) && visibleValue > 0 ? visibleValue : randomVisibleTurns(),
+      CONFIG.QUEST_VISIBLE_TURNS_MIN,
+      Math.max(CONFIG.QUEST_VISIBLE_TURNS_MIN, CONFIG.QUEST_VISIBLE_TURNS_MAX)
+    );
+  } else {
+    normalized.remaining_visible_turns = Math.max(0, Number.isFinite(visibleValue) ? visibleValue : 0);
+  }
+  normalized.deleted = false;
   return normalized;
 }
 
@@ -582,7 +675,7 @@ function normalizeRivals(rivals) {
 function syncMercBusyFromQuests() {
   const busyIds = new Set();
   state.quests.forEach((quest) => {
-    if (quest.status === 'in_progress') {
+    if (quest && !quest.deleted && quest.status === 'in_progress') {
       quest.assigned_merc_ids.forEach((id) => busyIds.add(id));
     }
   });
@@ -700,6 +793,11 @@ function openQuestAssignModal(questId) {
     return;
   }
 
+  if (quest.deleted || quest.status === 'empty') {
+    log('이 슬롯에는 진행 가능한 퀘스트가 없습니다.');
+    return;
+  }
+
   if (state.mercs.length === 0) {
     log('투입할 용병이 없습니다. 먼저 용병을 고용하세요.');
     return;
@@ -711,12 +809,6 @@ function openQuestAssignModal(questId) {
       return;
     }
     log(`[T${state.turn}] 이 퀘스트는 현재 진행 중입니다.`);
-    return;
-  }
-
-  const activeQuestCount = state.quests.filter((q) => q.status === 'in_progress').length;
-  if (activeQuestCount >= CONFIG.MAX_ACTIVE_QUESTS) {
-    log(`[T${state.turn}] 다른 퀘스트 완료를 기다린 후 다시 시도하세요.`);
     return;
   }
 
@@ -801,18 +893,16 @@ function prepareQuestAssignment(questId, selectedMercIds) {
   }
 
   const quest = state.quests[questIndex];
+  if (!quest || quest.deleted || quest.status === 'empty') {
+    log('이 슬롯에는 진행 가능한 퀘스트가 없습니다.');
+    return null;
+  }
   if (quest.status !== 'ready') {
     if (quest.status === 'bid_failed') {
       log(`[T${state.turn}] 이 퀘스트는 이미 다른 길드가 낙찰했습니다.`);
       return null;
     }
     log(`[T${state.turn}] 이 퀘스트는 이미 진행 중입니다.`);
-    return null;
-  }
-
-  const activeQuestCount = state.quests.filter((q) => q.status === 'in_progress').length;
-  if (activeQuestCount >= CONFIG.MAX_ACTIVE_QUESTS) {
-    log(`[T${state.turn}] 다른 퀘스트 완료를 기다린 후 다시 시도하세요.`);
     return null;
   }
 
@@ -965,6 +1055,8 @@ function startQuestAfterBid(quest, assignedMercs, playerBid) {
   quest.started_turn = state.turn;
   quest.bids.player = playerBid;
   quest.bids.winner = { type: 'player', id: 'player', value: playerBid };
+  quest.remaining_visible_turns = 0;
+  quest.deleted = false;
   assignedMercs.forEach((merc) => {
     merc.busy = true;
   });
@@ -984,6 +1076,28 @@ function markQuestBidFailure(quest, winner) {
   quest.assigned_merc_ids = [];
   delete quest.started_turn;
   quest.bids.winner = { type: 'rival', id: winner.id, value: winner.value };
+  quest.remaining_visible_turns = 0;
+  quest.deleted = false;
+}
+
+function deleteQuest(index) {
+  const quest = state.quests[index];
+  if (!quest || quest.deleted || quest.status === 'empty') {
+    return;
+  }
+  if (quest.status === 'in_progress') {
+    log('진행 중인 퀘스트는 삭제할 수 없습니다.');
+    return;
+  }
+  const confirmed = window.confirm('정말로 이 퀘스트를 삭제하시겠습니까?');
+  if (!confirmed) {
+    return;
+  }
+  state.quests[index] = createEmptyQuestSlot({ id: quest.id, deleted: true });
+  log(`[T${state.turn}] 퀘스트 ${quest.id}를 삭제했습니다.`);
+  save();
+  render();
+  refreshAssetChecklist();
 }
 
 /**
@@ -1004,6 +1118,7 @@ function log(message) {
  */
 function render() {
   elements.goldValue.textContent = `${state.gold}G`;
+  renderQuestSpawnRate();
   const recruitLocked = CONFIG.RECRUIT_ONCE_PER_TURN && state.lastRecruitTurn === state.turn;
   elements.recruitBtn.disabled = recruitLocked;
   elements.recruitBtn.title = recruitLocked ? '이번 턴에는 이미 용병을 모집했습니다.' : '';
@@ -1112,7 +1227,7 @@ function getMercInitials(name) {
 /** Render the quest cards with action buttons. */
 function renderQuests() {
   elements.questList.innerHTML = '';
-  if (state.quests.length === 0) {
+  if (!Array.isArray(state.quests) || state.quests.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
     empty.textContent = '턴을 진행해 퀘스트를 생성하세요.';
@@ -1120,9 +1235,18 @@ function renderQuests() {
     return;
   }
 
-  const activeQuestCount = state.quests.filter((quest) => quest.status === 'in_progress').length;
+  state.quests.forEach((quest, index) => {
+    if (!quest || quest.deleted || quest.status === 'empty') {
+      const emptyCard = document.createElement('div');
+      emptyCard.className = 'quest-card quest-card--empty';
+      const note = document.createElement('div');
+      note.className = 'quest-card__empty-note';
+      note.innerHTML = `빈 슬롯입니다.<br>턴 진행 시 ${formatSpawnRate()} 확률로 새 퀘스트가 등장합니다.`;
+      emptyCard.appendChild(note);
+      elements.questList.appendChild(emptyCard);
+      return;
+    }
 
-  state.quests.forEach((quest) => {
     const card = document.createElement('div');
     card.className = 'quest-card';
     const isInProgress = quest.status === 'in_progress';
@@ -1137,25 +1261,41 @@ function renderQuests() {
     const header = document.createElement('div');
     header.className = 'quest-card__header';
     const title = document.createElement('strong');
-    title.textContent = `던전 탐험`;
+    title.textContent = '던전 탐험';
+
+    const headerActions = document.createElement('div');
+    headerActions.className = 'quest-card__header-actions';
+
     const reward = document.createElement('span');
     reward.textContent = `보상 ${quest.reward}G`;
     const statusBadge = document.createElement('span');
     statusBadge.className = 'quest-card__status-badge';
+    const visibleTurns = Math.max(0, Number(quest.remaining_visible_turns) || 0);
     statusBadge.textContent = isInProgress
-      ? `진행 중 (남은 ${quest.remaining_turns}턴)`
+      ? `진행 중 (남 ${quest.remaining_turns}턴)`
       : isBidFailed
         ? '낙찰 실패'
-        : '대기 중';
+        : `대기 중 (만료까지 ${visibleTurns}턴)`;
     if (isInProgress) {
       statusBadge.classList.add('quest-card__status-badge--active');
     } else if (isBidFailed) {
       statusBadge.classList.add('quest-card__status-badge--failed');
     }
+
     const meta = document.createElement('div');
     meta.className = 'quest-card__meta';
     meta.append(reward, statusBadge);
-    header.append(title, meta);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'quest-card__delete-btn';
+    deleteBtn.textContent = '🗑️';
+    deleteBtn.title = '퀘스트 삭제';
+    deleteBtn.disabled = isInProgress;
+    deleteBtn.addEventListener('click', () => deleteQuest(index));
+
+    headerActions.append(meta, deleteBtn);
+    header.append(title, headerActions);
 
     const stats = document.createElement('div');
     stats.className = 'quest-card__stats';
@@ -1165,10 +1305,11 @@ function renderQuests() {
     requirements.className = 'quest-card__requirements';
     requirements.textContent = `요구 ATK ${quest.req.atk} / DEF ${quest.req.def} / STAM ${quest.req.stam}`;
 
-    const rivalBids = document.createElement('div');
-    rivalBids.className = 'quest-card__rival-bids';
     const rivalSummary = formatRivalBidSummary(quest);
+    let rivalBids = null;
     if (rivalSummary) {
+      rivalBids = document.createElement('div');
+      rivalBids.className = 'quest-card__rival-bids';
       rivalBids.textContent = rivalSummary;
     }
 
@@ -1182,11 +1323,37 @@ function renderQuests() {
       assigned.textContent = assignedNames.length > 0 ? `투입: ${assignedNames.join(', ')}` : '투입 용병 없음';
     }
 
+    const selectedStats = document.createElement('div');
+    selectedStats.className = 'quest-card__selected-stats';
+    const statsLabel = document.createElement('span');
+    statsLabel.className = 'quest-card__selected-stats-label';
+    statsLabel.textContent = '현재 선택 용병 합계';
+    selectedStats.appendChild(statsLabel);
+
+    const totals = getQuestAssignedTotals(quest);
+    const requirementsMap = { atk: quest.req.atk || 0, def: quest.req.def || 0, stam: quest.req.stam || 0 };
+    [
+      { key: 'atk', label: 'ATK' },
+      { key: 'def', label: 'DEF' },
+      { key: 'stam', label: 'STAM' }
+    ].forEach(({ key, label }) => {
+      const statValue = totals[key] || 0;
+      const requirement = requirementsMap[key] || 0;
+      const stat = document.createElement('span');
+      stat.className = 'quest-card__stat';
+      if (statValue >= requirement) {
+        stat.classList.add('quest-card__stat--ok');
+      } else {
+        stat.classList.add('quest-card__stat--insufficient');
+      }
+      stat.textContent = `${label} ${statValue}`;
+      selectedStats.appendChild(stat);
+    });
+
     const actions = document.createElement('div');
     actions.className = 'quest-card__actions';
     const runBtn = document.createElement('button');
     runBtn.className = 'btn btn--accent';
-    const canStart = quest.status === 'ready' && activeQuestCount < CONFIG.MAX_ACTIVE_QUESTS;
     if (isInProgress) {
       runBtn.textContent = '진행 중';
       runBtn.disabled = true;
@@ -1195,10 +1362,6 @@ function renderQuests() {
       runBtn.disabled = true;
       runBtn.classList.add('btn--disabled');
       runBtn.title = '다음 턴에 새 퀘스트로 교체됩니다.';
-    } else if (!canStart) {
-      runBtn.textContent = '대기 중';
-      runBtn.disabled = true;
-      runBtn.title = '다른 퀘스트 완료를 기다리세요';
     } else {
       runBtn.textContent = '수행하기';
       runBtn.addEventListener('click', () => openQuestAssignModal(quest.id));
@@ -1206,12 +1369,13 @@ function renderQuests() {
     actions.appendChild(runBtn);
 
     card.append(header, stats, requirements);
-    if (rivalSummary) {
+    if (rivalBids) {
       card.appendChild(rivalBids);
     }
     if (assigned.textContent) {
       card.appendChild(assigned);
     }
+    card.appendChild(selectedStats);
     if (isBidFailed) {
       const failureNote = document.createElement('div');
       failureNote.className = 'quest-card__failure-note';
@@ -1223,6 +1387,23 @@ function renderQuests() {
   });
 }
 
+function getQuestAssignedTotals(quest) {
+  if (!quest || !Array.isArray(quest.assigned_merc_ids)) {
+    return { atk: 0, def: 0, stam: 0 };
+  }
+  return quest.assigned_merc_ids.reduce(
+    (totals, id) => {
+      const merc = state.mercs.find((candidate) => candidate.id === id);
+      if (merc) {
+        totals.atk += merc.atk || 0;
+        totals.def += merc.def || 0;
+        totals.stam += merc.stamina || 0;
+      }
+      return totals;
+    },
+    { atk: 0, def: 0, stam: 0 }
+  );
+}
 function formatRivalBidSummary(quest) {
   if (!quest || !quest.bids || !Array.isArray(quest.bids.rivals)) {
     return '';
@@ -1267,6 +1448,13 @@ function renderLogs() {
     li.textContent = entry;
     elements.logList.appendChild(li);
   });
+}
+
+function renderQuestSpawnRate() {
+  if (!elements.questSpawnRate) {
+    return;
+  }
+  elements.questSpawnRate.textContent = formatSpawnRate();
 }
 
 /**
@@ -1358,6 +1546,19 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function randomVisibleTurns() {
+  const min = Math.max(1, Number(CONFIG.QUEST_VISIBLE_TURNS_MIN) || 1);
+  const maxCandidate = Math.max(min, Number(CONFIG.QUEST_VISIBLE_TURNS_MAX) || min);
+  return randomInt(min, maxCandidate);
+}
+
+function formatSpawnRate() {
+  const rate = Math.min(1, Math.max(0, Number(CONFIG.QUEST_SPAWN_RATE) || 0));
+  const percentage = rate * 100;
+  const formatted = Number.isInteger(percentage) ? percentage.toFixed(0) : percentage.toFixed(1);
+  return `${formatted}%`;
+}
+
 /**
  * @typedef {Object} GameState
  * @property {number} gold
@@ -1384,11 +1585,13 @@ function clamp(value, min, max) {
  * @property {number} reward
  * @property {number} turns_cost
  * @property {{atk: number, def: number, stam: number}} req
- * @property {'ready'|'in_progress'|'bid_failed'} status
+ * @property {'ready'|'in_progress'|'bid_failed'|'empty'} status
  * @property {number} remaining_turns
  * @property {string[]} assigned_merc_ids
  * @property {number=} started_turn
  * @property {{player?: number, rivals: {id: string, value: number}[], winner: ({type: 'player', id: 'player', value: number} | {type: 'rival', id: string, value: number}) | null}} bids
+ * @property {number} remaining_visible_turns
+ * @property {boolean} deleted
  *
  * @typedef {{id: string, name: string, rep: number}} Rival
  */
