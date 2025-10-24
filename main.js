@@ -24,7 +24,13 @@ const CONFIG = {
   ASSET_BG: 'assets/bg/medieval.jpg',
   ASSET_MERC: (mercId) => `assets/mercs/${mercId}.jpg`,
   ASSET_DUNGEON_THUMB: 'assets/monsters/dungeon.jpg',
-  LOG_LIMIT: 8
+  LOG_LIMIT: 8,
+  SMALL_INJURY_PROB: 0.12,
+  QUEST_JOURNAL_LIMIT: 4,
+  STANCE: {
+    meticulous: { overdueProbPerTurn: 0.15, bonusLootProbPerTurn: 0.25, bonusGoldRange: [5, 20], repPenaltyBase: 2 },
+    on_time: { overdueProbPerTurn: 0.03, bonusLootProbPerTurn: 0.05, bonusGoldRange: [0, 8], repPenaltyBase: 0 }
+  }
 };
 
 const STORAGE_KEY = 'rg_v1_save';
@@ -46,6 +52,7 @@ let state = {
   quests: [],
   log: [],
   lastRecruitTurn: null,
+  reputation: 50,
   rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival }))
 };
 
@@ -56,11 +63,22 @@ let assetChecklistLoading = true;
 let lastAssetLogSignature = '';
 const tempSelections = {};
 
+const EXPLORATION_SCENARIOS = {
+  encounter: ['좁은 복도에서 매복을 뚫고 전진했습니다.', '고블린 순찰대를 분산시키고 길을 확보했습니다.', '갑작스러운 함정과 맞닥뜨렸지만 재빠르게 회피했습니다.'],
+  discovery: ['먼지 쌓인 보관실을 발견했습니다.', '숨겨진 측면 통로를 찾아냈습니다.', '고대 문양이 새겨진 문을 조사했습니다.'],
+  rest: ['짧은 휴식으로 숨을 고르며 체력을 회복했습니다.', '전투 후 진형을 재정비했습니다.', '조용한 방에서 경계를 세우며 휴식을 취했습니다.'],
+  item: ['예비 물약을 사용해 기운을 되찾았습니다.', '보호 부적을 사용해 함정을 무력화했습니다.', '빛나는 횃불을 교체하며 시야를 확보했습니다.']
+};
+
+const EXPLORATION_SCENARIO_KEYS = Object.keys(EXPLORATION_SCENARIOS);
+const INJURY_MESSAGES = ['작은 찰과상을 입었습니다.', '함정 조각에 살짝 베였습니다.', '체력이 소폭 감소했습니다.', '지친 발걸음으로 속도가 느려졌습니다.'];
+
 const elements = {
   goldValue: document.getElementById('gold-value'),
   mercList: document.getElementById('merc-list'),
   questList: document.getElementById('quest-list'),
   logList: document.getElementById('log-list'),
+  reputationValue: document.getElementById('reputation-value'),
   assetList: document.getElementById('missing-assets-list'),
   assetNote: document.getElementById('asset-note'),
   recruitBtn: document.getElementById('recruit-btn'),
@@ -145,6 +163,72 @@ function computeSelectedStats(mercIds) {
   return totals;
 }
 
+function getTempQuestDraft(questId) {
+  const entry = tempSelections[questId];
+  if (!entry) {
+    return { mercs: [], stance: null };
+  }
+  if (Array.isArray(entry)) {
+    return { mercs: entry.slice(), stance: null };
+  }
+  return {
+    mercs: Array.isArray(entry.mercs) ? entry.mercs.slice() : [],
+    stance: typeof entry.stance === 'string' ? entry.stance : null
+  };
+}
+
+function setTempQuestDraft(questId, draft) {
+  const mercs = Array.isArray(draft?.mercs) ? draft.mercs.slice() : [];
+  const stance = typeof draft?.stance === 'string' ? draft.stance : null;
+  tempSelections[questId] = { mercs, stance };
+}
+
+function clearTempQuestDraft(questId) {
+  delete tempSelections[questId];
+}
+
+function randomChoice(list) {
+  if (!Array.isArray(list) || list.length === 0) {
+    return null;
+  }
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+function addQuestJournalEntry(quest, message) {
+  if (!quest || !message) {
+    return;
+  }
+  if (!Array.isArray(quest.journal)) {
+    quest.journal = [];
+  }
+  quest.journal.push(message);
+  if (quest.journal.length > CONFIG.QUEST_JOURNAL_LIMIT) {
+    quest.journal = quest.journal.slice(-CONFIG.QUEST_JOURNAL_LIMIT);
+  }
+}
+
+function formatQuestLogLabel(quest) {
+  if (!quest) {
+    return '퀘스트';
+  }
+  return `퀘스트 ${quest.id || ''}`.trim();
+}
+
+function getStanceConfig(quest) {
+  const stanceKey = quest && typeof quest.stance === 'string' && CONFIG.STANCE[quest.stance]
+    ? quest.stance
+    : 'meticulous';
+  return { key: stanceKey, config: CONFIG.STANCE[stanceKey] };
+}
+
+function computeQuestDifficultyWeight(quest) {
+  if (!quest || !quest.req) {
+    return 1;
+  }
+  const total = (Number(quest.req.atk) || 0) + (Number(quest.req.def) || 0) + (Number(quest.req.stam) || 0);
+  return Math.max(1, Math.ceil(total / 12));
+}
+
 /**
  * Load state from localStorage, falling back to a freshly seeded state.
  */
@@ -166,6 +250,7 @@ function load() {
           : [],
         log: Array.isArray(parsed.log) ? parsed.log.slice(-CONFIG.LOG_LIMIT) : [],
         lastRecruitTurn: typeof parsed.lastRecruitTurn === 'number' ? parsed.lastRecruitTurn : null,
+        reputation: Math.max(0, Number(parsed.reputation) || 50),
         rivals: normalizedRivals
       };
       loadedFromStorage = true;
@@ -182,6 +267,7 @@ function load() {
       quests: [],
       log: [],
       lastRecruitTurn: null,
+      reputation: 50,
       rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival }))
     };
   }
@@ -205,6 +291,7 @@ function save() {
     quests: state.quests,
     log: state.log,
     lastRecruitTurn: state.lastRecruitTurn,
+    reputation: state.reputation,
     rivals: state.rivals
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
@@ -376,15 +463,70 @@ function newTurn() {
   state.turn += 1;
   const completionLogs = [];
   const expirationLogs = [];
+  const explorationLogs = [];
+  const delayLogs = [];
 
   state.quests = (Array.isArray(state.quests) ? state.quests : []).map((quest) => {
     if (!quest || quest.deleted || quest.status === 'empty') {
       return createEmptyQuestSlot(quest);
     }
     if (quest.status === 'in_progress') {
-      const remaining = Math.max(0, (typeof quest.remaining_turns === 'number' ? quest.remaining_turns : quest.turns_cost) - 1);
-      quest.remaining_turns = remaining;
-      if (remaining <= 0) {
+      const { config: stanceConfig } = getStanceConfig(quest);
+      const effectiveConfig = stanceConfig || CONFIG.STANCE.meticulous;
+      const currentRemaining = Number.isFinite(quest.remaining_turns) ? quest.remaining_turns : quest.turns_cost;
+      const previousProgress = Number.isFinite(quest.progress) ? quest.progress : 0;
+      quest.progress = previousProgress + 1;
+      quest.remaining_turns = Math.max(0, currentRemaining - 1);
+      const deadline = Number.isFinite(quest.deadline_turn) ? quest.deadline_turn : quest.turns_cost;
+      if (quest.progress > deadline) {
+        quest.overdue = true;
+      }
+      if (!Number.isFinite(quest.tempBonusGold)) {
+        quest.tempBonusGold = 0;
+      }
+      if (!Array.isArray(quest.journal)) {
+        quest.journal = [];
+      }
+
+      const scenarioType = randomChoice(EXPLORATION_SCENARIO_KEYS) || 'encounter';
+      const basePool = EXPLORATION_SCENARIOS[scenarioType] || [];
+      const baseMessage = randomChoice(basePool) || '어둠 속을 조심스럽게 전진했습니다.';
+      addQuestJournalEntry(quest, baseMessage);
+      const fragments = [baseMessage];
+
+      const range = Array.isArray(effectiveConfig.bonusGoldRange) ? effectiveConfig.bonusGoldRange : [0, 0];
+      const bonusMin = Math.max(0, Number(range[0]) || 0);
+      const bonusMax = Math.max(bonusMin, Number(range[1]) || bonusMin);
+      if (Math.random() < effectiveConfig.bonusLootProbPerTurn) {
+        const bonusGold = randomInt(bonusMin, bonusMax);
+        if (bonusGold > 0) {
+          quest.tempBonusGold += bonusGold;
+          const bonusMessage = `상자 발견 (+${bonusGold}G)`;
+          fragments.push(bonusMessage);
+          addQuestJournalEntry(quest, bonusMessage);
+        }
+      }
+
+      if (Math.random() < CONFIG.SMALL_INJURY_PROB) {
+        const injuryDetail = randomChoice(INJURY_MESSAGES) || '작은 부상을 입었습니다.';
+        const injuryMessage = `작은 부상: ${injuryDetail}`;
+        fragments.push(injuryMessage);
+        addQuestJournalEntry(quest, injuryMessage);
+      }
+
+      const questLabel = formatQuestLogLabel(quest);
+      explorationLogs.push(`[T${state.turn}] ${questLabel}: ${fragments.join(' / ')}`);
+
+      if (quest.remaining_turns <= 0) {
+        const shouldDelay = Math.random() < effectiveConfig.overdueProbPerTurn;
+        if (shouldDelay) {
+          quest.remaining_turns = 1;
+          quest.overdue = true;
+          const delayMessage = `[T${state.turn}] ${questLabel} 일정 지연: 추가 탐색으로 한 턴이 더 소요됩니다.`;
+          delayLogs.push(delayMessage);
+          addQuestJournalEntry(quest, '일정 지연: 추가 탐색을 진행합니다.');
+          return quest;
+        }
         const { completionMessage, replacement } = finalizeQuest(quest);
         completionLogs.push(completionMessage);
         return replacement;
@@ -414,6 +556,8 @@ function newTurn() {
   currentRecruitCandidates = [];
 
   log(`[T${state.turn}] 새 턴이 시작되었습니다.`);
+  explorationLogs.forEach((message) => log(message));
+  delayLogs.forEach((message) => log(message));
   completionLogs.forEach((message) => log(message));
   expirationLogs.forEach((message) => log(message));
 
@@ -440,7 +584,13 @@ function generateQuest() {
     assigned_merc_ids: [],
     bids: generateQuestBids(reward),
     remaining_visible_turns: randomVisibleTurns(),
-    deleted: false
+    deleted: false,
+    stance: null,
+    deadline_turn: turns_cost,
+    overdue: false,
+    progress: 0,
+    tempBonusGold: 0,
+    journal: []
   };
 }
 
@@ -456,7 +606,13 @@ function createEmptyQuestSlot(base = {}) {
     assigned_merc_ids: [],
     bids: { player: undefined, rivals: [], winner: null },
     remaining_visible_turns: 0,
-    deleted: true
+    deleted: true,
+    stance: null,
+    deadline_turn: 0,
+    overdue: false,
+    progress: 0,
+    tempBonusGold: 0,
+    journal: []
   };
 }
 
@@ -517,14 +673,25 @@ function finalizeQuest(quest) {
   const totalWages = assignedMercs.reduce((sum, merc) => sum + (merc.wage_per_quest || 0), 0);
   const previousGold = state.gold;
   const contractValue = typeof quest.bids?.player === 'number' ? quest.bids.player : quest.reward;
-  const netGain = contractValue - totalWages;
+  const bonusGold = Math.max(0, Number(quest.tempBonusGold) || 0);
+  const finalReward = contractValue + bonusGold;
+  const netGain = finalReward - totalWages;
   state.gold = Math.max(0, state.gold + netGain);
 
   assignedMercs.forEach((merc) => {
     merc.busy = false;
   });
 
-  const completionMessage = `[T${state.turn}] 완료: Player 낙찰 퀘스트 ${quest.id} 정산 ${contractValue}G − 임금${totalWages}G = ${netGain >= 0 ? '+' : ''}${netGain}G (Gold ${previousGold}→${state.gold})`;
+  const { config: stanceConfig } = getStanceConfig(quest);
+  const penaltyBase = stanceConfig?.repPenaltyBase || 0;
+  const difficultyWeight = computeQuestDifficultyWeight(quest);
+  const repPenalty = quest.overdue ? Math.ceil(Math.max(0, penaltyBase) * difficultyWeight) : 0;
+  if (repPenalty > 0) {
+    state.reputation = Math.max(0, state.reputation - repPenalty);
+  }
+
+  const statusText = quest.overdue ? '기한 초과' : '기한 준수';
+  const completionMessage = `[T${state.turn}] 완료: ${formatQuestLogLabel(quest)} → ${statusText}, 계약 ${contractValue}G + 보너스 ${bonusGold}G − 임금 ${totalWages}G = ${netGain >= 0 ? '+' : ''}${netGain}G (Gold ${previousGold}→${state.gold})${repPenalty > 0 ? `, 평판 -${repPenalty}` : ''}`;
 
   return {
     completionMessage,
@@ -562,6 +729,16 @@ function ensureQuestSlots() {
     }
     if (!Array.isArray(quest.assigned_merc_ids)) {
       quest.assigned_merc_ids = [];
+    }
+    quest.stance = typeof quest.stance === 'string' && CONFIG.STANCE[quest.stance] ? quest.stance : null;
+    const defaultDeadline = quest.turns_cost || CONFIG.QUEST_TURNS_MIN;
+    const storedDeadline = Number(quest.deadline_turn);
+    quest.deadline_turn = Number.isFinite(storedDeadline) && storedDeadline > 0 ? storedDeadline : defaultDeadline;
+    quest.overdue = Boolean(quest.overdue);
+    quest.progress = Math.max(0, Number(quest.progress) || 0);
+    quest.tempBonusGold = Math.max(0, Number(quest.tempBonusGold) || 0);
+    if (!Array.isArray(quest.journal)) {
+      quest.journal = [];
     }
     quest.deleted = false;
     return quest;
@@ -636,6 +813,13 @@ function normalizeQuest(quest, rivals = DEFAULT_RIVALS) {
     normalized.remaining_visible_turns = Math.max(0, Number.isFinite(visibleValue) ? visibleValue : 0);
   }
   normalized.deleted = false;
+  normalized.stance = typeof quest.stance === 'string' && CONFIG.STANCE[quest.stance] ? quest.stance : null;
+  const storedDeadline = Number(quest.deadline_turn);
+  normalized.deadline_turn = Number.isFinite(storedDeadline) && storedDeadline > 0 ? storedDeadline : turns_cost;
+  normalized.overdue = Boolean(quest.overdue);
+  normalized.progress = Math.max(0, Number(quest.progress) || 0);
+  normalized.tempBonusGold = Math.max(0, Number(quest.tempBonusGold) || 0);
+  normalized.journal = Array.isArray(quest.journal) ? quest.journal.slice(-CONFIG.QUEST_JOURNAL_LIMIT) : [];
   return normalized;
 }
 
@@ -846,12 +1030,15 @@ function openQuestAssignModal(questId) {
   const statOrder = ['atk', 'def', 'stam'];
   const statLabels = { atk: 'ATK', def: 'DEF', stam: 'STAM' };
   const requirements = quest.req || { atk: 0, def: 0, stam: 0 };
-  const savedSelection = Array.isArray(tempSelections[questId]) ? tempSelections[questId] : [];
+  const draft = getTempQuestDraft(questId);
+  const savedSelection = Array.isArray(draft.mercs) ? draft.mercs : [];
   const initialSelection = savedSelection.filter((mercId) => {
     const merc = state.mercs.find((entry) => entry.id === mercId);
     return merc && !merc.busy;
   });
-  tempSelections[questId] = [...initialSelection];
+  const stanceDraft = typeof draft.stance === 'string' ? draft.stance : null;
+  setTempQuestDraft(questId, { mercs: initialSelection, stance: stanceDraft });
+  const currentDraft = getTempQuestDraft(questId);
 
   elements.modalTitle.textContent = '용병 배치';
   elements.modalBody.innerHTML = '';
@@ -884,6 +1071,70 @@ function openQuestAssignModal(questId) {
   });
   elements.modalBody.appendChild(requirementInfo);
 
+  const stanceWrapper = document.createElement('div');
+  stanceWrapper.className = 'stance-select';
+  const stanceTitle = document.createElement('p');
+  stanceTitle.className = 'stance-select__title';
+  stanceTitle.textContent = '탐험 성향 선택';
+  stanceWrapper.appendChild(stanceTitle);
+
+  const stanceHint = document.createElement('p');
+  stanceHint.className = 'stance-select__hint';
+  stanceHint.textContent = '성향에 따라 추가 보상과 기한 초과 위험이 달라집니다.';
+  stanceWrapper.appendChild(stanceHint);
+
+  const stanceOptions = document.createElement('div');
+  stanceOptions.className = 'stance-select__options';
+
+  const stanceConfigs = [
+    {
+      value: 'meticulous',
+      label: '꼼꼼히 탐색',
+      description: '보물 탐색에 집중 (추가 보상 ↑, 기한 초과 위험 ↑)'
+    },
+    {
+      value: 'on_time',
+      label: '기한 준수',
+      description: '계획된 루트 준수 (추가 보상 ↓, 기한 초과 위험 ↓)'
+    }
+  ];
+
+  const defaultStance = currentDraft.stance || 'meticulous';
+  if (!currentDraft.stance) {
+    currentDraft.stance = defaultStance;
+    setTempQuestDraft(questId, currentDraft);
+  }
+
+  stanceConfigs.forEach((config) => {
+    const option = document.createElement('label');
+    option.className = 'stance-select__option';
+
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'quest-stance';
+    radio.value = config.value;
+    radio.checked = currentDraft.stance === config.value;
+    radio.addEventListener('change', () => {
+      currentDraft.stance = radio.value;
+      setTempQuestDraft(questId, currentDraft);
+      updateSelectionUI();
+    });
+
+    const textWrapper = document.createElement('div');
+    textWrapper.className = 'stance-select__description';
+    const label = document.createElement('strong');
+    label.textContent = config.label;
+    const description = document.createElement('span');
+    description.textContent = config.description;
+    textWrapper.append(label, description);
+
+    option.append(radio, textWrapper);
+    stanceOptions.appendChild(option);
+  });
+
+  stanceWrapper.appendChild(stanceOptions);
+  elements.modalBody.appendChild(stanceWrapper);
+
   const list = document.createElement('div');
   list.className = 'assign-list';
 
@@ -911,7 +1162,8 @@ function openQuestAssignModal(questId) {
 
   const updateSelectionUI = () => {
     const selected = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map((input) => input.value);
-    tempSelections[questId] = selected;
+    currentDraft.mercs = selected;
+    setTempQuestDraft(questId, currentDraft);
     const totals = computeSelectedStats(selected);
     let meetsAll = true;
     statOrder.forEach((stat) => {
@@ -926,13 +1178,16 @@ function openQuestAssignModal(questId) {
       }
     });
     const hasSelection = selected.length > 0;
-    const canStart = hasSelection && meetsAll;
+    const stanceSelected = Boolean(currentDraft.stance);
+    const canStart = hasSelection && meetsAll && stanceSelected;
     confirmBtn.disabled = !canStart;
     if (!canStart) {
       confirmBtn.classList.add('btn--disabled');
       confirmBtn.title = !hasSelection
         ? '최소 한 명의 용병을 선택해야 합니다.'
-        : '요구 능력치를 충족해야 시작할 수 있습니다.';
+        : !meetsAll
+          ? '요구 능력치를 충족해야 시작할 수 있습니다.'
+          : '탐험 성향을 선택해야 합니다.';
     } else {
       confirmBtn.classList.remove('btn--disabled');
       confirmBtn.title = '';
@@ -1005,11 +1260,18 @@ function openQuestAssignModal(questId) {
       log('최소 한 명의 용병을 선택해야 합니다.');
       return;
     }
-    const preparation = prepareQuestAssignment(questId, selected);
+    currentDraft.mercs = selected;
+    setTempQuestDraft(questId, currentDraft);
+    const stance = currentDraft.stance;
+    if (!stance) {
+      log('탐험 성향을 선택해야 합니다.');
+      return;
+    }
+    const preparation = prepareQuestAssignment(questId, selected, stance);
     if (!preparation) {
       return;
     }
-    openBidModal(preparation.quest, preparation.assignedMercs);
+    openBidModal(preparation.quest, preparation.assignedMercs, preparation.stance);
   });
 
   actions.append(cancelBtn, confirmBtn);
@@ -1019,7 +1281,7 @@ function openQuestAssignModal(questId) {
   openModal();
 }
 
-function prepareQuestAssignment(questId, selectedMercIds) {
+function prepareQuestAssignment(questId, selectedMercIds, stance) {
   const questIndex = state.quests.findIndex((quest) => quest.id === questId);
   if (questIndex === -1) {
     log('퀘스트를 찾을 수 없습니다.');
@@ -1066,10 +1328,12 @@ function prepareQuestAssignment(questId, selectedMercIds) {
     return null;
   }
 
-  return { quest, assignedMercs };
+  setTempQuestDraft(questId, { mercs: selectedMercIds, stance });
+
+  return { quest, assignedMercs, stance };
 }
 
-function openBidModal(quest, assignedMercs) {
+function openBidModal(quest, assignedMercs, stance) {
   resetModalRequirementSummary();
   if (!quest.bids) {
     quest.bids = generateQuestBids(quest.reward);
@@ -1083,6 +1347,12 @@ function openBidModal(quest, assignedMercs) {
   summary.className = 'modal-description';
   summary.textContent = `제안 입찰가를 입력하세요. 기본 보상은 ${quest.reward}G입니다.`;
   elements.modalBody.appendChild(summary);
+
+  const stanceLine = document.createElement('p');
+  stanceLine.className = 'modal-subtle';
+  const stanceLabel = stance === 'on_time' ? '기한 준수' : '꼼꼼히 탐색';
+  stanceLine.textContent = `선택한 성향: ${stanceLabel}`;
+  elements.modalBody.appendChild(stanceLine);
 
   const rivalLine = document.createElement('p');
   rivalLine.className = 'modal-subtle';
@@ -1135,7 +1405,7 @@ function openBidModal(quest, assignedMercs) {
     log(logMessage);
 
     if (winner.type === 'player') {
-      startQuestAfterBid(quest, assignedMercs, bidValue);
+      startQuestAfterBid(quest, assignedMercs, bidValue, stance);
       closeModal();
       return;
     }
@@ -1183,7 +1453,7 @@ function buildBidLogMessage(quest, playerBid, winner) {
   return `[T${state.turn}] 입찰: Player ${playerBid}G${rivalsSummary ? ` vs ${rivalsSummary}` : ''} → 낙찰: ${winnerName}`;
 }
 
-function startQuestAfterBid(quest, assignedMercs, playerBid) {
+function startQuestAfterBid(quest, assignedMercs, playerBid, stance) {
   quest.status = 'in_progress';
   quest.remaining_turns = quest.turns_cost;
   quest.assigned_merc_ids = assignedMercs.map((merc) => merc.id);
@@ -1192,15 +1462,23 @@ function startQuestAfterBid(quest, assignedMercs, playerBid) {
   quest.bids.winner = { type: 'player', id: 'player', value: playerBid };
   quest.remaining_visible_turns = 0;
   quest.deleted = false;
+  quest.progress = 0;
+  quest.deadline_turn = Math.max(1, Number(quest.turns_cost) || CONFIG.QUEST_TURNS_MIN);
+  quest.overdue = false;
+  quest.tempBonusGold = 0;
+  quest.stance = typeof stance === 'string' ? stance : 'meticulous';
+  quest.journal = Array.isArray(quest.journal) ? quest.journal.slice(-CONFIG.QUEST_JOURNAL_LIMIT) : [];
   assignedMercs.forEach((merc) => {
     merc.busy = true;
   });
 
   syncMercBusyFromQuests();
 
-  log(`[T${state.turn}] 퀘스트 시작 ${quest.id}: 입찰가 ${playerBid}G, ${assignedMercs.length}명 투입, ${quest.turns_cost}턴 소요 예정.`);
+  addQuestJournalEntry(quest, '탐험을 시작했습니다.');
+  const stanceLabel = quest.stance === 'on_time' ? '기한 준수' : '꼼꼼히 탐색';
+  log(`[T${state.turn}] 퀘스트 시작 ${quest.id}: 입찰가 ${playerBid}G, ${assignedMercs.length}명 투입, ${quest.turns_cost}턴 소요 예정. (성향: ${stanceLabel})`);
 
-  delete tempSelections[quest.id];
+  clearTempQuestDraft(quest.id);
   save();
   render();
   refreshAssetChecklist();
@@ -1214,7 +1492,13 @@ function markQuestBidFailure(quest, winner) {
   quest.bids.winner = { type: 'rival', id: winner.id, value: winner.value };
   quest.remaining_visible_turns = 0;
   quest.deleted = false;
-  delete tempSelections[quest.id];
+  quest.stance = null;
+  quest.deadline_turn = quest.turns_cost || CONFIG.QUEST_TURNS_MIN;
+  quest.overdue = false;
+  quest.progress = 0;
+  quest.tempBonusGold = 0;
+  quest.journal = [];
+  clearTempQuestDraft(quest.id);
 }
 
 function deleteQuest(index) {
@@ -1232,7 +1516,7 @@ function deleteQuest(index) {
   }
   state.quests[index] = createEmptyQuestSlot({ id: quest.id, deleted: true });
   log(`[T${state.turn}] 퀘스트 ${quest.id}를 삭제했습니다.`);
-  delete tempSelections[quest.id];
+  clearTempQuestDraft(quest.id);
   save();
   render();
   refreshAssetChecklist();
@@ -1256,6 +1540,9 @@ function log(message) {
  */
 function render() {
   elements.goldValue.textContent = `${state.gold}G`;
+  if (elements.reputationValue) {
+    elements.reputationValue.textContent = `${state.reputation}`;
+  }
   renderQuestSpawnRate();
   const recruitLocked = CONFIG.RECRUIT_ONCE_PER_TURN && state.lastRecruitTurn === state.turn;
   elements.recruitBtn.disabled = recruitLocked;
@@ -1392,6 +1679,9 @@ function renderQuests() {
     if (isInProgress) {
       card.classList.add('quest-card--in-progress');
     }
+    if (quest.overdue) {
+      card.classList.add('quest-card--overdue');
+    }
     if (isBidFailed) {
       card.classList.add('quest-card--bid-failed');
     }
@@ -1399,7 +1689,12 @@ function renderQuests() {
     const header = document.createElement('div');
     header.className = 'quest-card__header';
     const title = document.createElement('strong');
-    title.textContent = '던전 탐험';
+    if (isInProgress) {
+      const remainingTurns = Math.max(0, Number(quest.remaining_turns) || 0);
+      title.textContent = `던전 탐험 (남은 ${remainingTurns}턴)`;
+    } else {
+      title.textContent = '던전 탐험';
+    }
 
     const headerActions = document.createElement('div');
     headerActions.className = 'quest-card__header-actions';
@@ -1409,20 +1704,30 @@ function renderQuests() {
     const statusBadge = document.createElement('span');
     statusBadge.className = 'quest-card__status-badge';
     const visibleTurns = Math.max(0, Number(quest.remaining_visible_turns) || 0);
-    statusBadge.textContent = isInProgress
-      ? `진행 중 (남 ${quest.remaining_turns}턴)`
-      : isBidFailed
-        ? '낙찰 실패'
-        : `대기 중 (만료까지 ${visibleTurns}턴)`;
     if (isInProgress) {
-      statusBadge.classList.add('quest-card__status-badge--active');
+      if (quest.overdue) {
+        statusBadge.textContent = '기한 초과';
+        statusBadge.classList.add('quest-card__status-badge--overdue');
+      } else {
+        statusBadge.textContent = '진행 중';
+        statusBadge.classList.add('quest-card__status-badge--active');
+      }
     } else if (isBidFailed) {
+      statusBadge.textContent = '낙찰 실패';
       statusBadge.classList.add('quest-card__status-badge--failed');
+    } else {
+      statusBadge.textContent = `대기 중 (만료까지 ${visibleTurns}턴)`;
     }
 
     const meta = document.createElement('div');
     meta.className = 'quest-card__meta';
     meta.append(reward, statusBadge);
+    if (isInProgress && quest.stance) {
+      const stanceTag = document.createElement('span');
+      stanceTag.className = `quest-card__stance quest-card__stance--${quest.stance}`;
+      stanceTag.textContent = quest.stance === 'on_time' ? '성향: 기한 준수' : '성향: 꼼꼼히 탐색';
+      meta.appendChild(stanceTag);
+    }
 
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
@@ -1514,6 +1819,57 @@ function renderQuests() {
       card.appendChild(assigned);
     }
     card.appendChild(selectedStats);
+    if (isInProgress) {
+      const exploration = document.createElement('div');
+      exploration.className = 'quest-card__exploration';
+
+      const progressWrapper = document.createElement('div');
+      progressWrapper.className = 'progress-bar';
+      const progressFill = document.createElement('div');
+      progressFill.className = 'progress-bar__fill';
+      const progressBase = Math.max(1, Number(quest.deadline_turn) || quest.turns_cost || 1);
+      const currentProgress = Math.max(0, Number(quest.progress) || 0);
+      const progressPercent = Math.min(100, Math.max(0, (currentProgress / progressBase) * 100));
+      progressFill.style.width = `${progressPercent}%`;
+      const progressToken = document.createElement('span');
+      progressToken.className = 'progress-bar__token';
+      progressToken.textContent = '●';
+      progressToken.style.left = `${progressPercent}%`;
+      progressWrapper.append(progressFill, progressToken);
+
+      const progressLabel = document.createElement('div');
+      progressLabel.className = 'progress-bar__label';
+      const overdueTurns = Math.max(0, currentProgress - progressBase);
+      progressLabel.textContent = overdueTurns > 0
+        ? `진행 ${currentProgress}턴 (기한 초과 +${overdueTurns})`
+        : `진행 ${currentProgress}턴 / 기한 ${progressBase}턴`;
+
+      const bonusLabel = document.createElement('div');
+      bonusLabel.className = 'progress-bar__bonus';
+      bonusLabel.textContent = quest.tempBonusGold > 0
+        ? `추가 골드 확보 +${quest.tempBonusGold}G`
+        : '추가 보상 탐색 중';
+
+      const journal = document.createElement('div');
+      journal.className = 'quest-card__journal';
+      const recentEntries = Array.isArray(quest.journal) ? quest.journal.slice(-2) : [];
+      if (recentEntries.length === 0) {
+        const emptyEntry = document.createElement('div');
+        emptyEntry.className = 'quest-card__journal-entry';
+        emptyEntry.textContent = '최근 탐험 로그 없음';
+        journal.appendChild(emptyEntry);
+      } else {
+        recentEntries.forEach((entry) => {
+          const line = document.createElement('div');
+          line.className = 'quest-card__journal-entry';
+          line.textContent = entry;
+          journal.appendChild(line);
+        });
+      }
+
+      exploration.append(progressWrapper, progressLabel, bonusLabel, journal);
+      card.appendChild(exploration);
+    }
     if (isBidFailed) {
       const failureNote = document.createElement('div');
       failureNote.className = 'quest-card__failure-note';
@@ -1705,6 +2061,7 @@ function formatSpawnRate() {
  * @property {Merc[]} mercs
  * @property {Quest[]} quests
  * @property {?number} lastRecruitTurn
+ * @property {number} reputation
  * @property {Rival[]} rivals
  *
  * @typedef {Object} Merc
@@ -1731,6 +2088,12 @@ function formatSpawnRate() {
  * @property {{player?: number, rivals: {id: string, value: number}[], winner: ({type: 'player', id: 'player', value: number} | {type: 'rival', id: string, value: number}) | null}} bids
  * @property {number} remaining_visible_turns
  * @property {boolean} deleted
+ * @property {'meticulous'|'on_time'|null} stance
+ * @property {number} deadline_turn
+ * @property {boolean} overdue
+ * @property {number} progress
+ * @property {number} tempBonusGold
+ * @property {string[]} journal
  *
  * @typedef {{id: string, name: string, rep: number}} Rival
  */
