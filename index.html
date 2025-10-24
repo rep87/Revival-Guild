@@ -20,6 +20,7 @@
         <span class="resource-label">⭐ Reputation</span>
         <span id="reputation-value">0</span>
       </div>
+      <div class="top-bar__calendar" id="calendar-display">길드력 21년 04월</div>
       <div class="top-bar__spawn-rate">현재 퀘스트 발생률: <span id="quest-spawn-rate">0%</span></div>
       <div class="top-bar__actions">
         <button id="recruit-btn" class="btn btn--primary">용병 모집</button>
@@ -77,6 +78,16 @@
           <p id="reqSum" class="req req-sum"></p>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="board-formula" id="board-formula">
+    <button id="board-formula-toggle" class="board-formula__toggle" aria-expanded="false">📌 경제·평판 공식 보기</button>
+    <div id="board-formula-content" class="board-formula__content" aria-hidden="true">
+      <p>Final Reward = max(0, Gold + (Bid or Reward) + BonusGold − ΣWages)</p>
+      <p>ΔRep = Base(tier) × StanceGainCoef − OverduePenalty × DifficultyWeight</p>
+      <p>P(k) = softmax<sub>k</sub>( w<sub>bid</sub>·BidTerm + w<sub>stats</sub>·StatsTerm + w<sub>rep</sub>·RepTerm )</p>
+      <p>1턴 = 1개월</p>
     </div>
   </div>
 
