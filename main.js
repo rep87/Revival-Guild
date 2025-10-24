@@ -292,8 +292,19 @@ async function refreshAssetChecklist() {
   const required = computeRequiredAssets();
   assetChecklist = await checkAssetsExistence(required);
   assetChecklistLoading = false;
+  applyAssetFallbacks(assetChecklist);
   renderAssetChecklist();
   reportAssetChecklistToConsole(assetChecklist);
+}
+
+/** Ensure the UI adapts when required assets are missing. */
+function applyAssetFallbacks(list) {
+  if (typeof document === 'undefined' || !Array.isArray(list)) {
+    return;
+  }
+  const bgEntry = list.find((item) => item.path === CONFIG.ASSET_BG);
+  const hasBackground = bgEntry ? bgEntry.exists : true;
+  document.body.classList.toggle('no-bg-asset', !hasBackground);
 }
 
 /**
@@ -338,6 +349,11 @@ function openRecruitModal() {
     const card = document.createElement('div');
     card.className = 'recruit-card';
 
+    const portrait = createPortraitElement(merc);
+
+    const body = document.createElement('div');
+    body.className = 'recruit-card__body';
+
     const header = document.createElement('div');
     header.className = 'recruit-card__header';
     const name = document.createElement('strong');
@@ -355,7 +371,8 @@ function openRecruitModal() {
     hireBtn.textContent = '고용하기';
     hireBtn.addEventListener('click', () => hireMerc(merc));
 
-    card.append(header, stats, hireBtn);
+    body.append(header, stats, hireBtn);
+    card.append(portrait, body);
     elements.modalBody.appendChild(card);
   });
 
@@ -526,6 +543,14 @@ function renderMercs() {
     const card = document.createElement('div');
     card.className = 'merc-card';
 
+    const body = document.createElement('div');
+    body.className = 'merc-card__body';
+
+    const portrait = createPortraitElement(merc);
+
+    const info = document.createElement('div');
+    info.className = 'merc-card__info';
+
     const header = document.createElement('div');
     header.className = 'merc-card__header';
     const name = document.createElement('strong');
@@ -538,9 +563,54 @@ function renderMercs() {
     stats.className = 'merc-card__stats';
     stats.innerHTML = `ATK ${merc.atk} · DEF ${merc.def} · STAM ${merc.stamina} · 계약금 ${merc.signing_bonus}G`;
 
-    card.append(header, stats);
+    info.append(header, stats);
+    body.append(portrait, info);
+    card.append(body);
     elements.mercList.appendChild(card);
   });
+}
+
+/**
+ * Build a portrait element that handles missing assets gracefully.
+ * @param {Merc} merc
+ * @returns {HTMLDivElement}
+ */
+function createPortraitElement(merc) {
+  const container = document.createElement('div');
+  container.className = 'portrait portrait--missing';
+
+  const initials = document.createElement('div');
+  initials.className = 'portrait__fallback';
+  initials.textContent = getMercInitials(merc.name);
+
+  const assetPath = CONFIG.ASSET_MERC ? CONFIG.ASSET_MERC(merc.id) : '';
+  if (assetPath) {
+    const img = document.createElement('img');
+    img.alt = `${merc.name} 초상화`;
+    img.src = assetPath;
+    img.addEventListener('load', () => {
+      container.classList.remove('portrait--missing');
+    });
+    img.addEventListener('error', () => {
+      container.classList.add('portrait--missing');
+    });
+    container.appendChild(img);
+  }
+
+  container.appendChild(initials);
+  return container;
+}
+
+/**
+ * Convert a mercenary name into 1-2 character initials.
+ * @param {string} name
+ */
+function getMercInitials(name) {
+  if (typeof name !== 'string' || name.trim().length === 0) {
+    return '?';
+  }
+  const parts = name.trim().split(/\s+/).slice(0, 2);
+  return parts.map((part) => part.charAt(0).toUpperCase()).join('') || '?';
 }
 
 /** Render the quest cards with action buttons. */
