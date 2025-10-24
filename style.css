@@ -102,6 +102,11 @@ body::before {
   font-weight: 600;
 }
 
+.resource-divider {
+  color: var(--color-text-secondary);
+  opacity: 0.6;
+}
+
 .top-bar__actions {
   display: flex;
   gap: 12px;
@@ -371,11 +376,20 @@ body::before {
   border-color: rgba(161, 74, 74, 0.5);
   color: #ffb0b0;
 }
+.quest-card__status-badge--overdue {
+  background: rgba(210, 94, 50, 0.35);
+  border-color: rgba(210, 94, 50, 0.6);
+  color: #ffd5c0;
+}
 
 .quest-card--in-progress {
   border-color: rgba(196, 123, 42, 0.4);
   box-shadow: 0 0 0 1px rgba(196, 123, 42, 0.25);
   background: rgba(196, 123, 42, 0.12);
+}
+.quest-card--overdue {
+  border-color: rgba(210, 94, 50, 0.6);
+  box-shadow: 0 0 0 1px rgba(210, 94, 50, 0.35);
 }
 
 .quest-card--bid-failed {
@@ -446,6 +460,80 @@ body::before {
   display: flex;
   justify-content: flex-end;
   margin-top: 4px;
+}
+
+.quest-card__stance {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  background: rgba(18, 14, 10, 0.55);
+  border: 1px solid rgba(221, 186, 110, 0.25);
+  color: var(--color-text-secondary);
+}
+
+.quest-card__stance--meticulous {
+  border-color: rgba(196, 123, 42, 0.45);
+  color: var(--color-text-primary);
+}
+
+.quest-card__stance--on_time {
+  border-color: rgba(100, 168, 210, 0.45);
+  color: #cde9ff;
+}
+
+.quest-card__exploration {
+  border-top: 1px solid rgba(221, 186, 110, 0.18);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.progress-bar {
+  position: relative;
+  height: 10px;
+  background: rgba(18, 14, 10, 0.6);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(221, 186, 110, 0.25);
+}
+
+.progress-bar__fill {
+  position: absolute;
+  inset: 0;
+  width: 0;
+  background: linear-gradient(90deg, rgba(196, 123, 42, 0.85), rgba(196, 123, 42, 0.5));
+  transition: width 0.3s ease;
+}
+
+.progress-bar__token {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--color-text-primary);
+  font-size: 0.9rem;
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.65);
+}
+
+.progress-bar__label,
+.progress-bar__bonus {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+.quest-card__journal {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quest-card__journal-entry {
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+  background: rgba(18, 14, 10, 0.55);
+  border-radius: 8px;
+  padding: 4px 8px;
+  border: 1px solid rgba(221, 186, 110, 0.18);
 }
 
 .quest-card--empty {
@@ -644,6 +732,60 @@ body::before {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+}
+
+.stance-select {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.stance-select__title {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.stance-select__hint {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  margin-top: -6px;
+}
+
+.stance-select__options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stance-select__option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(18, 14, 10, 0.6);
+  border-radius: 10px;
+  border: 1px solid rgba(221, 186, 110, 0.2);
+}
+
+.stance-select__option input[type="radio"] {
+  width: 18px;
+  height: 18px;
+}
+
+.stance-select__description {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stance-select__description strong {
+  font-size: 0.95rem;
+}
+
+.stance-select__description span {
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
 }
 
 .assign-list {
