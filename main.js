@@ -27,6 +27,12 @@ const CONFIG = {
 
 const STORAGE_KEY = 'rg_v1_save';
 
+const DEFAULT_RIVALS = [
+  { id: 'r1', name: 'Iron Fang', rep: 50 },
+  { id: 'r2', name: 'Moonlight', rep: 50 },
+  { id: 'r3', name: 'Ashen Company', rep: 50 }
+];
+
 /** @type {{start_gold: number, merc_names: string[]}} */
 let seedData = { start_gold: CONFIG.START_GOLD, merc_names: [] };
 
@@ -37,7 +43,8 @@ let state = {
   mercs: [],
   quests: [],
   log: [],
-  lastRecruitTurn: null
+  lastRecruitTurn: null,
+  rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival }))
 };
 
 let currentRecruitCandidates = [];
@@ -114,13 +121,19 @@ function load() {
   if (stored) {
     try {
       const parsed = JSON.parse(stored);
+      const normalizedRivals = Array.isArray(parsed.rivals)
+        ? normalizeRivals(parsed.rivals)
+        : DEFAULT_RIVALS.map((rival) => ({ ...rival }));
       state = {
         gold: Math.max(0, Number(parsed.gold) || CONFIG.START_GOLD),
         turn: Math.max(1, Number(parsed.turn) || 1),
         mercs: Array.isArray(parsed.mercs) ? parsed.mercs.map(normalizeMerc).filter(Boolean) : [],
-        quests: Array.isArray(parsed.quests) ? parsed.quests.map(normalizeQuest).filter(Boolean) : [],
+        quests: Array.isArray(parsed.quests)
+          ? parsed.quests.map((quest) => normalizeQuest(quest, normalizedRivals)).filter(Boolean)
+          : [],
         log: Array.isArray(parsed.log) ? parsed.log.slice(-CONFIG.LOG_LIMIT) : [],
-        lastRecruitTurn: typeof parsed.lastRecruitTurn === 'number' ? parsed.lastRecruitTurn : null
+        lastRecruitTurn: typeof parsed.lastRecruitTurn === 'number' ? parsed.lastRecruitTurn : null,
+        rivals: normalizedRivals
       };
       ensureQuestSlots();
       syncMercBusyFromQuests();
@@ -136,7 +149,8 @@ function load() {
     mercs: [],
     quests: [],
     log: [],
-    lastRecruitTurn: null
+    lastRecruitTurn: null,
+    rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival }))
   };
   ensureQuestSlots();
   save();
@@ -152,7 +166,8 @@ function save() {
     mercs: state.mercs,
     quests: state.quests,
     log: state.log,
-    lastRecruitTurn: state.lastRecruitTurn
+    lastRecruitTurn: state.lastRecruitTurn,
+    rivals: state.rivals
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
 }
@@ -334,6 +349,9 @@ function newTurn() {
       }
       return quest;
     }
+    if (quest.status === 'bid_failed') {
+      return generateQuest();
+    }
     return generateQuest();
   });
 
@@ -356,16 +374,33 @@ function newTurn() {
  */
 function generateQuest() {
   const turns_cost = randomInt(CONFIG.QUEST_TURNS_MIN, CONFIG.QUEST_TURNS_MAX);
+  const reward = randomInt(CONFIG.QUEST_REWARD_MIN, CONFIG.QUEST_REWARD_MAX);
   return {
     id: `quest_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     type: 'dungeon',
-    reward: randomInt(CONFIG.QUEST_REWARD_MIN, CONFIG.QUEST_REWARD_MAX),
+    reward,
     turns_cost,
     req: generateQuestRequirements(turns_cost),
     status: 'ready',
     remaining_turns: 0,
-    assigned_merc_ids: []
+    assigned_merc_ids: [],
+    bids: generateQuestBids(reward)
   };
+}
+
+function generateQuestBids(reward) {
+  const rivals = Array.isArray(state.rivals) && state.rivals.length > 0 ? state.rivals : DEFAULT_RIVALS;
+  return {
+    player: undefined,
+    rivals: rivals.map((rival) => ({ id: rival.id, value: generateRivalBid(reward) })),
+    winner: null
+  };
+}
+
+function generateRivalBid(reward) {
+  const multiplier = 0.85 + Math.random() * (1.15 - 0.85);
+  const value = Math.round(reward * multiplier);
+  return clamp(value, 1, 9999);
 }
 
 /**
@@ -395,14 +430,15 @@ function finalizeQuest(quest) {
 
   const totalWages = assignedMercs.reduce((sum, merc) => sum + (merc.wage_per_quest || 0), 0);
   const previousGold = state.gold;
-  const netGain = quest.reward - totalWages;
+  const contractValue = typeof quest.bids?.player === 'number' ? quest.bids.player : quest.reward;
+  const netGain = contractValue - totalWages;
   state.gold = Math.max(0, state.gold + netGain);
 
   assignedMercs.forEach((merc) => {
     merc.busy = false;
   });
 
-  const completionMessage = `[T${state.turn}] 퀘스트 완료 ${quest.id}: 보상 ${quest.reward}G, 임금 ${totalWages}G → ${netGain >= 0 ? '+' : ''}${netGain}G (Gold ${previousGold}→${state.gold})`;
+  const completionMessage = `[T${state.turn}] 완료: Player 낙찰 퀘스트 ${quest.id} 정산 ${contractValue}G − 임금${totalWages}G = ${netGain >= 0 ? '+' : ''}${netGain}G (Gold ${previousGold}→${state.gold})`;
 
   return {
     completionMessage,
@@ -412,7 +448,16 @@ function finalizeQuest(quest) {
 
 /** Ensure quest slots are filled up to the configured amount. */
 function ensureQuestSlots() {
-  state.quests = state.quests.slice(0, CONFIG.QUEST_SLOTS);
+  state.quests = state.quests
+    .slice(0, CONFIG.QUEST_SLOTS)
+    .map((quest) => {
+      if (!quest.bids) {
+        quest.bids = generateQuestBids(quest.reward);
+      } else {
+        quest.bids = normalizeQuestBids(quest.bids, quest.reward, state.rivals);
+      }
+      return quest;
+    });
   while (state.quests.length < CONFIG.QUEST_SLOTS) {
     state.quests.push(generateQuest());
   }
@@ -430,12 +475,16 @@ function normalizeMerc(merc) {
 }
 
 /** Normalize a quest object loaded from storage. */
-function normalizeQuest(quest) {
+function normalizeQuest(quest, rivals = DEFAULT_RIVALS) {
   if (!quest || typeof quest !== 'object') {
     return null;
   }
   const turns_cost = Math.max(CONFIG.QUEST_TURNS_MIN, Math.min(CONFIG.QUEST_TURNS_MAX, Number(quest.turns_cost) || CONFIG.QUEST_TURNS_MIN));
-  const status = quest.status === 'in_progress' ? 'in_progress' : 'ready';
+  const status = quest.status === 'in_progress'
+    ? 'in_progress'
+    : quest.status === 'bid_failed'
+      ? 'bid_failed'
+      : 'ready';
   const req = quest.req && typeof quest.req === 'object'
     ? {
         atk: Math.max(0, Number(quest.req.atk) || 0),
@@ -455,12 +504,78 @@ function normalizeQuest(quest) {
     remaining_turns: status === 'in_progress'
       ? Math.max(0, Number(quest.remaining_turns) || turns_cost)
       : 0,
-    assigned_merc_ids: Array.isArray(quest.assigned_merc_ids) ? quest.assigned_merc_ids : []
+    assigned_merc_ids: Array.isArray(quest.assigned_merc_ids) && status === 'in_progress' ? quest.assigned_merc_ids : []
   };
   if (typeof quest.started_turn === 'number') {
     normalized.started_turn = quest.started_turn;
   }
+  normalized.bids = normalizeQuestBids(quest.bids, normalized.reward, rivals);
+  if (status === 'bid_failed') {
+    normalized.remaining_turns = 0;
+    normalized.assigned_merc_ids = [];
+  }
   return normalized;
+}
+
+function normalizeQuestBids(bids, reward, rivals = DEFAULT_RIVALS) {
+  const rivalMap = new Map(rivals.map((rival) => [rival.id, rival]));
+  const normalizedRivals = Array.isArray(bids?.rivals)
+    ? bids.rivals
+        .map((entry) => {
+          const id = typeof entry.id === 'string' ? entry.id : null;
+          if (!id || !rivalMap.has(id)) {
+            return null;
+          }
+          return {
+            id,
+            value: clamp(Math.round(Number(entry.value) || reward), 1, 9999)
+          };
+        })
+        .filter(Boolean)
+    : [];
+
+  rivals.forEach((rival) => {
+    if (!normalizedRivals.some((entry) => entry.id === rival.id)) {
+      normalizedRivals.push({ id: rival.id, value: generateRivalBid(reward) });
+    }
+  });
+
+  const rivalOrder = new Map(rivals.map((rival, index) => [rival.id, index]));
+  normalizedRivals.sort((a, b) => {
+    const aIndex = rivalOrder.has(a.id) ? rivalOrder.get(a.id) : Number.MAX_SAFE_INTEGER;
+    const bIndex = rivalOrder.has(b.id) ? rivalOrder.get(b.id) : Number.MAX_SAFE_INTEGER;
+    return aIndex - bIndex;
+  });
+
+  const playerBid = typeof bids?.player === 'number' ? clamp(Math.round(bids.player), 1, 9999) : undefined;
+  const winner = bids?.winner && typeof bids.winner === 'object'
+    ? {
+        type: bids.winner.type === 'rival' ? 'rival' : 'player',
+        id: bids.winner.type === 'rival' && typeof bids.winner.id === 'string' ? bids.winner.id : 'player',
+        value: typeof bids.winner.value === 'number' ? clamp(Math.round(bids.winner.value), 1, 9999) : (playerBid || null)
+      }
+    : null;
+
+  return {
+    player: playerBid,
+    rivals: normalizedRivals,
+    winner
+  };
+}
+
+function normalizeRivals(rivals) {
+  return rivals
+    .map((rival) => {
+      if (!rival || typeof rival !== 'object') {
+        return null;
+      }
+      return {
+        id: typeof rival.id === 'string' ? rival.id : `r${Math.random().toString(36).slice(2, 6)}`,
+        name: typeof rival.name === 'string' ? rival.name : 'Rival Guild',
+        rep: Math.max(0, Number(rival.rep) || 0)
+      };
+    })
+    .filter(Boolean);
 }
 
 /** Sync merc busy flags from quests in progress. */
@@ -591,6 +706,10 @@ function openQuestAssignModal(questId) {
   }
 
   if (quest.status !== 'ready') {
+    if (quest.status === 'bid_failed') {
+      log(`[T${state.turn}] 이 퀘스트는 이미 다른 길드가 낙찰했습니다.`);
+      return;
+    }
     log(`[T${state.turn}] 이 퀘스트는 현재 진행 중입니다.`);
     return;
   }
@@ -661,10 +780,11 @@ function openQuestAssignModal(questId) {
       log('최소 한 명의 용병을 선택해야 합니다.');
       return;
     }
-    const started = runQuest(questId, selected);
-    if (started) {
-      closeModal();
+    const preparation = prepareQuestAssignment(questId, selected);
+    if (!preparation) {
+      return;
     }
+    openBidModal(preparation.quest, preparation.assignedMercs);
   });
 
   actions.append(cancelBtn, confirmBtn);
@@ -673,39 +793,38 @@ function openQuestAssignModal(questId) {
   openModal();
 }
 
-/**
- * Resolve a quest with the selected mercenaries, updating gold and quest slots.
- * @param {string} questId
- * @param {string[]} selectedMercIds
- */
-function runQuest(questId, selectedMercIds) {
+function prepareQuestAssignment(questId, selectedMercIds) {
   const questIndex = state.quests.findIndex((quest) => quest.id === questId);
   if (questIndex === -1) {
     log('퀘스트를 찾을 수 없습니다.');
-    return false;
+    return null;
   }
 
   const quest = state.quests[questIndex];
   if (quest.status !== 'ready') {
+    if (quest.status === 'bid_failed') {
+      log(`[T${state.turn}] 이 퀘스트는 이미 다른 길드가 낙찰했습니다.`);
+      return null;
+    }
     log(`[T${state.turn}] 이 퀘스트는 이미 진행 중입니다.`);
-    return false;
+    return null;
   }
 
   const activeQuestCount = state.quests.filter((q) => q.status === 'in_progress').length;
   if (activeQuestCount >= CONFIG.MAX_ACTIVE_QUESTS) {
     log(`[T${state.turn}] 다른 퀘스트 완료를 기다린 후 다시 시도하세요.`);
-    return false;
+    return null;
   }
 
   const assignedMercs = state.mercs.filter((merc) => selectedMercIds.includes(merc.id));
   if (assignedMercs.length === 0) {
     log('선택된 용병이 없습니다.');
-    return false;
+    return null;
   }
 
   if (assignedMercs.some((merc) => merc.busy)) {
     log(`[T${state.turn}] 일부 용병이 이미 임무 중입니다.`);
-    return false;
+    return null;
   }
 
   const totals = assignedMercs.reduce((acc, merc) => {
@@ -720,26 +839,151 @@ function runQuest(questId, selectedMercIds) {
   const meetsRequirements = totals.atk >= requirements.atk && totals.def >= requirements.def && totals.stam >= requirements.stam;
   if (!meetsRequirements) {
     log(`[T${state.turn}] 요구 능력치가 부족합니다. (보유 ATK ${totals.atk} / DEF ${totals.def} / STAM ${totals.stam})`);
-    return false;
+    return null;
   }
 
+  return { quest, assignedMercs };
+}
+
+function openBidModal(quest, assignedMercs) {
+  if (!quest.bids) {
+    quest.bids = generateQuestBids(quest.reward);
+  } else {
+    quest.bids = normalizeQuestBids(quest.bids, quest.reward, state.rivals);
+  }
+  elements.modalTitle.textContent = '입찰 제출';
+  elements.modalBody.innerHTML = '';
+
+  const summary = document.createElement('p');
+  summary.className = 'modal-description';
+  summary.textContent = `제안 입찰가를 입력하세요. 기본 보상은 ${quest.reward}G입니다.`;
+  elements.modalBody.appendChild(summary);
+
+  const rivalLine = document.createElement('p');
+  rivalLine.className = 'modal-subtle';
+  rivalLine.textContent = `AI 입찰가 → ${formatRivalBidSummary(quest)}`;
+  elements.modalBody.appendChild(rivalLine);
+
+  const inputWrapper = document.createElement('div');
+  inputWrapper.className = 'bid-input';
+  const label = document.createElement('label');
+  label.setAttribute('for', 'player-bid-input');
+  label.textContent = '플레이어 입찰 (G)';
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.id = 'player-bid-input';
+  input.min = '1';
+  input.max = '9999';
+  input.step = '1';
+  input.value = `${quest.reward}`;
+  inputWrapper.append(label, input);
+  elements.modalBody.appendChild(inputWrapper);
+
+  const actions = document.createElement('div');
+  actions.className = 'modal__actions';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn btn--primary';
+  cancelBtn.textContent = '취소';
+  cancelBtn.addEventListener('click', () => closeModal());
+
+  const confirmBtn = document.createElement('button');
+  confirmBtn.className = 'btn btn--accent';
+  confirmBtn.textContent = '입찰 확정';
+  confirmBtn.addEventListener('click', () => {
+    const raw = Number(input.value);
+    if (!Number.isFinite(raw) || raw < 1) {
+      log('입찰가는 1 이상의 숫자여야 합니다.');
+      return;
+    }
+    const bidValue = clamp(Math.round(raw), 1, 9999);
+    if (!quest.bids) {
+      quest.bids = generateQuestBids(quest.reward);
+    }
+    quest.bids.player = bidValue;
+    const winner = determineBidWinner(quest, bidValue);
+    quest.bids.winner = winner.type === 'player'
+      ? { type: 'player', id: 'player', value: bidValue }
+      : { type: 'rival', id: winner.id, value: winner.value };
+
+    const logMessage = buildBidLogMessage(quest, bidValue, winner);
+    log(logMessage);
+
+    if (winner.type === 'player') {
+      startQuestAfterBid(quest, assignedMercs, bidValue);
+      closeModal();
+      return;
+    }
+
+    markQuestBidFailure(quest, winner);
+    save();
+    render();
+    closeModal();
+  });
+
+  actions.append(cancelBtn, confirmBtn);
+  elements.modalBody.appendChild(actions);
+}
+
+function determineBidWinner(quest, playerBid) {
+  const rivalEntries = Array.isArray(quest.bids?.rivals) ? quest.bids.rivals : [];
+  const bids = [
+    { type: 'player', id: 'player', value: playerBid },
+    ...rivalEntries.map((entry) => ({ type: 'rival', id: entry.id, value: entry.value }))
+  ];
+  bids.sort((a, b) => {
+    if (a.value === b.value) {
+      if (a.type === b.type) {
+        return 0;
+      }
+      return a.type === 'player' ? -1 : 1;
+    }
+    return a.value - b.value;
+  });
+  return bids[0];
+}
+
+function buildBidLogMessage(quest, playerBid, winner) {
+  const rivalParts = Array.isArray(quest.bids?.rivals)
+    ? quest.bids.rivals.map((entry) => {
+        const rival = getRivalById(entry.id);
+        const name = formatRivalDisplayName(rival ? rival.name : 'Rival');
+        return `${name} ${entry.value}G`;
+      })
+    : [];
+  const rivalsSummary = rivalParts.join(' / ');
+  const winnerName = winner.type === 'player'
+    ? 'Player'
+    : formatRivalDisplayName((getRivalById(winner.id) || {}).name || 'Rival');
+  return `[T${state.turn}] 입찰: Player ${playerBid}G${rivalsSummary ? ` vs ${rivalsSummary}` : ''} → 낙찰: ${winnerName}`;
+}
+
+function startQuestAfterBid(quest, assignedMercs, playerBid) {
   quest.status = 'in_progress';
   quest.remaining_turns = quest.turns_cost;
   quest.assigned_merc_ids = assignedMercs.map((merc) => merc.id);
   quest.started_turn = state.turn;
+  quest.bids.player = playerBid;
+  quest.bids.winner = { type: 'player', id: 'player', value: playerBid };
   assignedMercs.forEach((merc) => {
     merc.busy = true;
   });
 
   syncMercBusyFromQuests();
 
-  log(`[T${state.turn}] 퀘스트 시작 ${quest.id}: ${assignedMercs.length}명 투입, ${quest.turns_cost}턴 소요 예정.`);
+  log(`[T${state.turn}] 퀘스트 시작 ${quest.id}: 입찰가 ${playerBid}G, ${assignedMercs.length}명 투입, ${quest.turns_cost}턴 소요 예정.`);
 
   save();
   render();
   refreshAssetChecklist();
+}
 
-  return true;
+function markQuestBidFailure(quest, winner) {
+  quest.status = 'bid_failed';
+  quest.remaining_turns = 0;
+  quest.assigned_merc_ids = [];
+  delete quest.started_turn;
+  quest.bids.winner = { type: 'rival', id: winner.id, value: winner.value };
 }
 
 /**
@@ -881,8 +1125,13 @@ function renderQuests() {
   state.quests.forEach((quest) => {
     const card = document.createElement('div');
     card.className = 'quest-card';
-    if (quest.status === 'in_progress') {
+    const isInProgress = quest.status === 'in_progress';
+    const isBidFailed = quest.status === 'bid_failed';
+    if (isInProgress) {
       card.classList.add('quest-card--in-progress');
+    }
+    if (isBidFailed) {
+      card.classList.add('quest-card--bid-failed');
     }
 
     const header = document.createElement('div');
@@ -893,11 +1142,15 @@ function renderQuests() {
     reward.textContent = `보상 ${quest.reward}G`;
     const statusBadge = document.createElement('span');
     statusBadge.className = 'quest-card__status-badge';
-    statusBadge.textContent = quest.status === 'in_progress'
+    statusBadge.textContent = isInProgress
       ? `진행 중 (남은 ${quest.remaining_turns}턴)`
-      : '대기 중';
-    if (quest.status === 'in_progress') {
+      : isBidFailed
+        ? '낙찰 실패'
+        : '대기 중';
+    if (isInProgress) {
       statusBadge.classList.add('quest-card__status-badge--active');
+    } else if (isBidFailed) {
+      statusBadge.classList.add('quest-card__status-badge--failed');
     }
     const meta = document.createElement('div');
     meta.className = 'quest-card__meta';
@@ -912,9 +1165,16 @@ function renderQuests() {
     requirements.className = 'quest-card__requirements';
     requirements.textContent = `요구 ATK ${quest.req.atk} / DEF ${quest.req.def} / STAM ${quest.req.stam}`;
 
+    const rivalBids = document.createElement('div');
+    rivalBids.className = 'quest-card__rival-bids';
+    const rivalSummary = formatRivalBidSummary(quest);
+    if (rivalSummary) {
+      rivalBids.textContent = rivalSummary;
+    }
+
     const assigned = document.createElement('div');
     assigned.className = 'quest-card__assigned';
-    if (quest.status === 'in_progress') {
+    if (isInProgress) {
       const assignedNames = quest.assigned_merc_ids
         .map((id) => state.mercs.find((merc) => merc.id === id))
         .filter(Boolean)
@@ -927,9 +1187,14 @@ function renderQuests() {
     const runBtn = document.createElement('button');
     runBtn.className = 'btn btn--accent';
     const canStart = quest.status === 'ready' && activeQuestCount < CONFIG.MAX_ACTIVE_QUESTS;
-    if (quest.status === 'in_progress') {
+    if (isInProgress) {
       runBtn.textContent = '진행 중';
       runBtn.disabled = true;
+    } else if (isBidFailed) {
+      runBtn.textContent = '낙찰 실패';
+      runBtn.disabled = true;
+      runBtn.classList.add('btn--disabled');
+      runBtn.title = '다음 턴에 새 퀘스트로 교체됩니다.';
     } else if (!canStart) {
       runBtn.textContent = '대기 중';
       runBtn.disabled = true;
@@ -941,12 +1206,54 @@ function renderQuests() {
     actions.appendChild(runBtn);
 
     card.append(header, stats, requirements);
+    if (rivalSummary) {
+      card.appendChild(rivalBids);
+    }
     if (assigned.textContent) {
       card.appendChild(assigned);
+    }
+    if (isBidFailed) {
+      const failureNote = document.createElement('div');
+      failureNote.className = 'quest-card__failure-note';
+      failureNote.textContent = 'AI 길드가 낙찰했습니다. 다음 턴에 새 퀘스트로 교체됩니다.';
+      card.appendChild(failureNote);
     }
     card.append(actions);
     elements.questList.appendChild(card);
   });
+}
+
+function formatRivalBidSummary(quest) {
+  if (!quest || !quest.bids || !Array.isArray(quest.bids.rivals)) {
+    return '';
+  }
+  const rivals = quest.bids.rivals
+    .map((bid) => {
+      const rival = getRivalById(bid.id);
+      const name = formatRivalDisplayName(rival ? rival.name : 'Rival');
+      return `${name} ${bid.value}G`;
+    })
+    .filter(Boolean);
+  return rivals.join(' · ');
+}
+
+function getRivalById(id) {
+  if (!id) {
+    return null;
+  }
+  return state.rivals.find((rival) => rival.id === id) || DEFAULT_RIVALS.find((rival) => rival.id === id) || null;
+}
+
+function formatRivalDisplayName(name) {
+  if (typeof name !== 'string') {
+    return 'Rival';
+  }
+  const trimmed = name.trim();
+  if (trimmed.length <= 12) {
+    return trimmed;
+  }
+  const firstWord = trimmed.split(/\s+/)[0];
+  return firstWord || trimmed;
 }
 
 /** Render the recent log entries. */
@@ -1058,6 +1365,7 @@ function clamp(value, min, max) {
  * @property {Merc[]} mercs
  * @property {Quest[]} quests
  * @property {?number} lastRecruitTurn
+ * @property {Rival[]} rivals
  *
  * @typedef {Object} Merc
  * @property {string} id
@@ -1076,8 +1384,11 @@ function clamp(value, min, max) {
  * @property {number} reward
  * @property {number} turns_cost
  * @property {{atk: number, def: number, stam: number}} req
- * @property {'ready'|'in_progress'} status
+ * @property {'ready'|'in_progress'|'bid_failed'} status
  * @property {number} remaining_turns
  * @property {string[]} assigned_merc_ids
  * @property {number=} started_turn
+ * @property {{player?: number, rivals: {id: string, value: number}[], winner: ({type: 'player', id: 'player', value: number} | {type: 'rival', id: string, value: number}) | null}} bids
+ *
+ * @typedef {{id: string, name: string, rep: number}} Rival
  */
