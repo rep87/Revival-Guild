@@ -54,6 +54,7 @@ let currentQuestId = null;
 let assetChecklist = [];
 let assetChecklistLoading = true;
 let lastAssetLogSignature = '';
+const tempSelections = {};
 
 const elements = {
   goldValue: document.getElementById('gold-value'),
@@ -69,7 +70,9 @@ const elements = {
   modal: document.getElementById('modal-content'),
   modalTitle: document.getElementById('modal-title'),
   modalBody: document.getElementById('modal-body'),
-  modalClose: document.getElementById('modal-close')
+  modalClose: document.getElementById('modal-close'),
+  modalReqSummary: document.getElementById('modal-req-summary'),
+  modalReqSum: document.getElementById('reqSum')
 };
 
 /**
@@ -114,6 +117,32 @@ function bindEvents() {
       closeModal();
     }
   });
+}
+
+function resetModalRequirementSummary() {
+  if (elements.modalReqSummary) {
+    elements.modalReqSummary.classList.add('hidden');
+  }
+  if (elements.modalReqSum) {
+    elements.modalReqSum.innerHTML = '';
+  }
+}
+
+function computeSelectedStats(mercIds) {
+  const totals = { atk: 0, def: 0, stam: 0 };
+  if (!Array.isArray(mercIds) || mercIds.length === 0) {
+    return totals;
+  }
+  mercIds.forEach((mercId) => {
+    const merc = state.mercs.find((entry) => entry.id === mercId);
+    if (!merc) {
+      return;
+    }
+    totals.atk += Number(merc.atk) || 0;
+    totals.def += Number(merc.def) || 0;
+    totals.stam += Number(merc.stamina) || 0;
+  });
+  return totals;
 }
 
 /**
@@ -708,6 +737,7 @@ function openRecruit() {
 
 /** Render the recruit modal body based on current candidates. */
 function renderRecruitModalBody() {
+  resetModalRequirementSummary();
   elements.modalBody.innerHTML = '';
 
   const description = document.createElement('p');
@@ -813,8 +843,25 @@ function openQuestAssignModal(questId) {
   }
 
   currentQuestId = questId;
+  const statOrder = ['atk', 'def', 'stam'];
+  const statLabels = { atk: 'ATK', def: 'DEF', stam: 'STAM' };
+  const requirements = quest.req || { atk: 0, def: 0, stam: 0 };
+  const savedSelection = Array.isArray(tempSelections[questId]) ? tempSelections[questId] : [];
+  const initialSelection = savedSelection.filter((mercId) => {
+    const merc = state.mercs.find((entry) => entry.id === mercId);
+    return merc && !merc.busy;
+  });
+  tempSelections[questId] = [...initialSelection];
+
   elements.modalTitle.textContent = '용병 배치';
   elements.modalBody.innerHTML = '';
+
+  if (elements.modalReqSummary) {
+    elements.modalReqSummary.classList.remove('hidden');
+  }
+  if (elements.modalReqSum) {
+    elements.modalReqSum.textContent = '선택 합계: ';
+  }
 
   const summary = document.createElement('p');
   summary.textContent = `보상 ${quest.reward}G, 소모 ${quest.turns_cost} 턴`;
@@ -822,12 +869,75 @@ function openQuestAssignModal(questId) {
   elements.modalBody.appendChild(summary);
 
   const requirementInfo = document.createElement('p');
-  requirementInfo.className = 'modal-highlight';
-  requirementInfo.textContent = `요구 능력치 → ATK ${quest.req.atk} / DEF ${quest.req.def} / STAM ${quest.req.stam}`;
+  requirementInfo.className = 'modal-highlight req';
+  requirementInfo.append('요구 능력치 → ');
+  const requirementStatElements = {};
+  statOrder.forEach((stat, index) => {
+    const span = document.createElement('span');
+    span.dataset.stat = stat;
+    span.textContent = `${statLabels[stat]} ${requirements[stat] || 0}`;
+    requirementInfo.appendChild(span);
+    requirementStatElements[stat] = span;
+    if (index < statOrder.length - 1) {
+      requirementInfo.append(' / ');
+    }
+  });
   elements.modalBody.appendChild(requirementInfo);
 
   const list = document.createElement('div');
   list.className = 'assign-list';
+
+  const sumStatElements = {};
+  if (elements.modalReqSum) {
+    statOrder.forEach((stat, index) => {
+      const span = document.createElement('span');
+      span.dataset.stat = stat;
+      span.textContent = `${statLabels[stat]} 0`;
+      elements.modalReqSum.appendChild(span);
+      sumStatElements[stat] = span;
+      if (index < statOrder.length - 1) {
+        elements.modalReqSum.append(' / ');
+      }
+    });
+  }
+
+  const updateSpanState = (span, meets) => {
+    if (!span) {
+      return;
+    }
+    span.classList.remove('ok', 'ng');
+    span.classList.add(meets ? 'ok' : 'ng');
+  };
+
+  const updateSelectionUI = () => {
+    const selected = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map((input) => input.value);
+    tempSelections[questId] = selected;
+    const totals = computeSelectedStats(selected);
+    let meetsAll = true;
+    statOrder.forEach((stat) => {
+      const meets = totals[stat] >= (requirements[stat] || 0);
+      updateSpanState(requirementStatElements[stat], meets);
+      updateSpanState(sumStatElements[stat], meets);
+      if (sumStatElements[stat]) {
+        sumStatElements[stat].textContent = `${statLabels[stat]} ${totals[stat]}`;
+      }
+      if (!meets) {
+        meetsAll = false;
+      }
+    });
+    const hasSelection = selected.length > 0;
+    const canStart = hasSelection && meetsAll;
+    confirmBtn.disabled = !canStart;
+    if (!canStart) {
+      confirmBtn.classList.add('btn--disabled');
+      confirmBtn.title = !hasSelection
+        ? '최소 한 명의 용병을 선택해야 합니다.'
+        : '요구 능력치를 충족해야 시작할 수 있습니다.';
+    } else {
+      confirmBtn.classList.remove('btn--disabled');
+      confirmBtn.title = '';
+    }
+  };
 
   state.mercs.forEach((merc) => {
     const item = document.createElement('div');
@@ -848,6 +958,26 @@ function openQuestAssignModal(questId) {
     checkbox.id = `assign-${merc.id}`;
     checkbox.value = merc.id;
     checkbox.disabled = merc.busy;
+    if (!checkbox.disabled && initialSelection.includes(merc.id)) {
+      checkbox.checked = true;
+    }
+
+    checkbox.addEventListener('change', updateSelectionUI);
+
+    item.addEventListener('click', (event) => {
+      const target = event.target;
+      if (target && target.tagName && target.tagName.toLowerCase() === 'input') {
+        return;
+      }
+      if (target instanceof HTMLElement && target.closest('label') === label) {
+        return;
+      }
+      if (checkbox.disabled) {
+        return;
+      }
+      checkbox.checked = !checkbox.checked;
+      updateSelectionUI();
+    });
 
     item.append(label, checkbox);
     list.appendChild(item);
@@ -865,7 +995,10 @@ function openQuestAssignModal(questId) {
 
   const confirmBtn = document.createElement('button');
   confirmBtn.className = 'btn btn--accent';
-  confirmBtn.textContent = '퀘스트 수행';
+  confirmBtn.textContent = '시작';
+  confirmBtn.disabled = true;
+  confirmBtn.classList.add('btn--disabled');
+  confirmBtn.title = '요구 능력치를 충족해야 시작할 수 있습니다.';
   confirmBtn.addEventListener('click', () => {
     const selected = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map((input) => input.value);
     if (selected.length === 0) {
@@ -882,6 +1015,7 @@ function openQuestAssignModal(questId) {
   actions.append(cancelBtn, confirmBtn);
   elements.modalBody.appendChild(actions);
 
+  updateSelectionUI();
   openModal();
 }
 
@@ -936,6 +1070,7 @@ function prepareQuestAssignment(questId, selectedMercIds) {
 }
 
 function openBidModal(quest, assignedMercs) {
+  resetModalRequirementSummary();
   if (!quest.bids) {
     quest.bids = generateQuestBids(quest.reward);
   } else {
@@ -1065,6 +1200,7 @@ function startQuestAfterBid(quest, assignedMercs, playerBid) {
 
   log(`[T${state.turn}] 퀘스트 시작 ${quest.id}: 입찰가 ${playerBid}G, ${assignedMercs.length}명 투입, ${quest.turns_cost}턴 소요 예정.`);
 
+  delete tempSelections[quest.id];
   save();
   render();
   refreshAssetChecklist();
@@ -1078,6 +1214,7 @@ function markQuestBidFailure(quest, winner) {
   quest.bids.winner = { type: 'rival', id: winner.id, value: winner.value };
   quest.remaining_visible_turns = 0;
   quest.deleted = false;
+  delete tempSelections[quest.id];
 }
 
 function deleteQuest(index) {
@@ -1095,6 +1232,7 @@ function deleteQuest(index) {
   }
   state.quests[index] = createEmptyQuestSlot({ id: quest.id, deleted: true });
   log(`[T${state.turn}] 퀘스트 ${quest.id}를 삭제했습니다.`);
+  delete tempSelections[quest.id];
   save();
   render();
   refreshAssetChecklist();
@@ -1463,6 +1601,7 @@ function renderQuestSpawnRate() {
 function closeModal() {
   elements.modalOverlay.classList.add('hidden');
   elements.modalBody.innerHTML = '';
+  resetModalRequirementSummary();
   currentQuestId = null;
 }
 

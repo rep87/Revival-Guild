@@ -533,6 +533,38 @@ body::before {
   overflow-y: auto;
 }
 
+.modal__body-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modal__req-summary {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(221, 186, 110, 0.2);
+  font-size: 0.95rem;
+}
+
+.modal__req-summary.hidden {
+  display: none;
+}
+
+.req-sum {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.req .ok {
+  color: #8bd17c;
+  font-weight: 600;
+}
+
+.req .ng {
+  color: #ff6b6b;
+  font-weight: 600;
+}
+
 .modal__close {
   background: transparent;
   border: none;
