@@ -3,8 +3,12 @@
  * Handles state management, UI rendering, and persistence for the mini prototype.
  */
 
+const DEBUG_MODE = typeof window !== 'undefined' && window.location.search.includes('debug=1');
+
 const CONFIG = {
   START_GOLD: 500,
+  START_YEAR: 21,
+  START_MONTH: 4,
   MERC_POOL_SIZE: 5,
   MERC_SIGN_MIN: 20,
   MERC_SIGN_MAX: 120,
@@ -28,17 +32,58 @@ const CONFIG = {
   SMALL_INJURY_PROB: 0.12,
   QUEST_JOURNAL_LIMIT: 4,
   STANCE: {
-    meticulous: { overdueProbPerTurn: 0.15, bonusLootProbPerTurn: 0.25, bonusGoldRange: [5, 20], repPenaltyBase: 2 },
-    on_time: { overdueProbPerTurn: 0.03, bonusLootProbPerTurn: 0.05, bonusGoldRange: [0, 8], repPenaltyBase: 0 }
-  }
+    meticulous: {
+      overdueProbPerTurn: 0.15,
+      bonusLootProbPerTurn: 0.25,
+      bonusGoldRange: [5, 20],
+      repPenaltyBase: 2,
+      repGainCoef: 1.1
+    },
+    on_time: {
+      overdueProbPerTurn: 0.03,
+      bonusLootProbPerTurn: 0.05,
+      bonusGoldRange: [0, 8],
+      repPenaltyBase: 0,
+      repGainCoef: 1.0
+    }
+  },
+  BID_TEMP: 0.35,
+  WEIGHTS_BY_IMPORTANCE: {
+    gold: { bid: 0.7, stats: 0.15, rep: 0.15 },
+    reputation: { bid: 0.2, stats: 0.35, rep: 0.45 },
+    stats: { bid: 0.25, stats: 0.55, rep: 0.2 }
+  },
+  REP_MIN: 0,
+  REP_MAX: 100
 };
 
 const STORAGE_KEY = 'rg_v1_save';
 
+const QUEST_TIER_DISTRIBUTION = [
+  { tier: 'S', weight: 0.1 },
+  { tier: 'A', weight: 0.25 },
+  { tier: 'B', weight: 0.35 },
+  { tier: 'C', weight: 0.3 }
+];
+
+const QUEST_IMPORTANCE_BY_TIER = {
+  S: ['reputation', 'stats'],
+  A: ['stats', 'reputation', 'gold'],
+  B: ['gold', 'stats', 'reputation'],
+  C: ['gold', 'gold', 'stats']
+};
+
+const REPUTATION_REWARD_BY_TIER = {
+  S: 6,
+  A: 4,
+  B: 3,
+  C: 2
+};
+
 const DEFAULT_RIVALS = [
-  { id: 'r1', name: 'Iron Fang', rep: 50 },
-  { id: 'r2', name: 'Moonlight', rep: 50 },
-  { id: 'r3', name: 'Ashen Company', rep: 50 }
+  { id: 'r1', name: 'Iron Fang', rep: 52 },
+  { id: 'r2', name: 'Moonlight', rep: 47 },
+  { id: 'r3', name: 'Ashen Company', rep: 61 }
 ];
 
 /** @type {{start_gold: number, merc_names: string[]}} */
@@ -52,7 +97,7 @@ let state = {
   quests: [],
   log: [],
   lastRecruitTurn: null,
-  reputation: 50,
+  reputation: 25,
   rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival }))
 };
 
@@ -90,7 +135,11 @@ const elements = {
   modalBody: document.getElementById('modal-body'),
   modalClose: document.getElementById('modal-close'),
   modalReqSummary: document.getElementById('modal-req-summary'),
-  modalReqSum: document.getElementById('reqSum')
+  modalReqSum: document.getElementById('reqSum'),
+  calendarDisplay: document.getElementById('calendar-display'),
+  formulaToggle: document.getElementById('board-formula-toggle'),
+  formulaContent: document.getElementById('board-formula-content'),
+  formulaBox: document.getElementById('board-formula')
 };
 
 /**
@@ -130,6 +179,9 @@ function bindEvents() {
   elements.recruitBtn.addEventListener('click', () => openRecruit());
   elements.newTurnBtn.addEventListener('click', () => newTurn());
   elements.modalClose.addEventListener('click', closeModal);
+  if (elements.formulaToggle) {
+    elements.formulaToggle.addEventListener('click', toggleBoardFormula);
+  }
   elements.modalOverlay.addEventListener('click', (event) => {
     if (event.target === elements.modalOverlay) {
       closeModal();
@@ -250,7 +302,7 @@ function load() {
           : [],
         log: Array.isArray(parsed.log) ? parsed.log.slice(-CONFIG.LOG_LIMIT) : [],
         lastRecruitTurn: typeof parsed.lastRecruitTurn === 'number' ? parsed.lastRecruitTurn : null,
-        reputation: Math.max(0, Number(parsed.reputation) || 50),
+        reputation: clampRep(Number(parsed.reputation), 25),
         rivals: normalizedRivals
       };
       loadedFromStorage = true;
@@ -267,7 +319,7 @@ function load() {
       quests: [],
       log: [],
       lastRecruitTurn: null,
-      reputation: 50,
+      reputation: 25,
       rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival }))
     };
   }
@@ -310,7 +362,7 @@ function ensureFoldersNote() {
       <li>배경 → <code>${CONFIG.ASSET_BG}</code></li>
       <li>용병 예: m1 → <code>${CONFIG.ASSET_MERC('m1')}</code></li>
       <li>던전 썸네일 → <code>${CONFIG.ASSET_DUNGEON_THUMB}</code></li>
-      <li>업로드 후 페이지 새로고침(Shift+Reload)</li>
+      <li>업로드 후 하드 리로드(Ctrl+F5 / ⌘+Shift+R)</li>
     </ul>
   `;
 }
@@ -481,8 +533,8 @@ function newTurn() {
       if (quest.progress > deadline) {
         quest.overdue = true;
       }
-      if (!Number.isFinite(quest.tempBonusGold)) {
-        quest.tempBonusGold = 0;
+      if (!Number.isFinite(quest.bonusGold)) {
+        quest.bonusGold = 0;
       }
       if (!Array.isArray(quest.journal)) {
         quest.journal = [];
@@ -500,7 +552,7 @@ function newTurn() {
       if (Math.random() < effectiveConfig.bonusLootProbPerTurn) {
         const bonusGold = randomInt(bonusMin, bonusMax);
         if (bonusGold > 0) {
-          quest.tempBonusGold += bonusGold;
+          quest.bonusGold += bonusGold;
           const bonusMessage = `상자 발견 (+${bonusGold}G)`;
           fragments.push(bonusMessage);
           addQuestJournalEntry(quest, bonusMessage);
@@ -573,9 +625,13 @@ function newTurn() {
 function generateQuest() {
   const turns_cost = randomInt(CONFIG.QUEST_TURNS_MIN, CONFIG.QUEST_TURNS_MAX);
   const reward = randomInt(CONFIG.QUEST_REWARD_MIN, CONFIG.QUEST_REWARD_MAX);
+  const tier = rollQuestTier();
+  const importance = pickQuestImportance(tier);
   return {
     id: `quest_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     type: 'dungeon',
+    tier,
+    importance,
     reward,
     turns_cost,
     req: generateQuestRequirements(turns_cost),
@@ -589,8 +645,9 @@ function generateQuest() {
     deadline_turn: turns_cost,
     overdue: false,
     progress: 0,
-    tempBonusGold: 0,
-    journal: []
+    bonusGold: 0,
+    journal: [],
+    contractProb: createInitialContractProb()
   };
 }
 
@@ -598,6 +655,8 @@ function createEmptyQuestSlot(base = {}) {
   return {
     id: typeof base.id === 'string' ? base.id : `empty_${Math.random().toString(36).slice(2, 7)}`,
     type: 'dungeon',
+    tier: base.tier || 'C',
+    importance: base.importance || 'gold',
     reward: 0,
     turns_cost: 0,
     req: { atk: 0, def: 0, stam: 0 },
@@ -611,9 +670,37 @@ function createEmptyQuestSlot(base = {}) {
     deadline_turn: 0,
     overdue: false,
     progress: 0,
-    tempBonusGold: 0,
-    journal: []
+    bonusGold: 0,
+    journal: [],
+    contractProb: createInitialContractProb()
   };
+}
+
+function rollQuestTier() {
+  const roll = Math.random();
+  let cumulative = 0;
+  for (const entry of QUEST_TIER_DISTRIBUTION) {
+    cumulative += entry.weight;
+    if (roll <= cumulative) {
+      return entry.tier;
+    }
+  }
+  return QUEST_TIER_DISTRIBUTION[QUEST_TIER_DISTRIBUTION.length - 1].tier;
+}
+
+function pickQuestImportance(tier) {
+  const options = QUEST_IMPORTANCE_BY_TIER[tier] || ['gold'];
+  const index = Math.floor(Math.random() * options.length);
+  return options[Math.max(0, Math.min(options.length - 1, index))];
+}
+
+function createInitialContractProb() {
+  const base = { player: 0 };
+  const rivals = Array.isArray(state?.rivals) && state.rivals.length > 0 ? state.rivals : DEFAULT_RIVALS;
+  rivals.forEach((rival) => {
+    base[rival.id] = 0;
+  });
+  return base;
 }
 
 function spawnQuestsForEmptySlots(force = false) {
@@ -673,7 +760,7 @@ function finalizeQuest(quest) {
   const totalWages = assignedMercs.reduce((sum, merc) => sum + (merc.wage_per_quest || 0), 0);
   const previousGold = state.gold;
   const contractValue = typeof quest.bids?.player === 'number' ? quest.bids.player : quest.reward;
-  const bonusGold = Math.max(0, Number(quest.tempBonusGold) || 0);
+  const bonusGold = Math.max(0, Number(quest.bonusGold) || 0);
   const finalReward = contractValue + bonusGold;
   const netGain = finalReward - totalWages;
   state.gold = Math.max(0, state.gold + netGain);
@@ -685,16 +772,30 @@ function finalizeQuest(quest) {
   const { config: stanceConfig } = getStanceConfig(quest);
   const penaltyBase = stanceConfig?.repPenaltyBase || 0;
   const difficultyWeight = computeQuestDifficultyWeight(quest);
+  const gainBase = REPUTATION_REWARD_BY_TIER[quest.tier] || REPUTATION_REWARD_BY_TIER.C;
+  const repGainCoef = stanceConfig?.repGainCoef || 1;
+  const repGain = !quest.overdue ? Math.max(0, Math.round(gainBase * repGainCoef)) : 0;
+  if (repGain > 0) {
+    state.reputation = clampRep(state.reputation + repGain, state.reputation + repGain);
+  }
   const repPenalty = quest.overdue ? Math.ceil(Math.max(0, penaltyBase) * difficultyWeight) : 0;
   if (repPenalty > 0) {
-    state.reputation = Math.max(0, state.reputation - repPenalty);
+    state.reputation = clampRep(state.reputation - repPenalty, state.reputation - repPenalty);
   }
 
   const statusText = quest.overdue ? '기한 초과' : '기한 준수';
-  const completionMessage = `[T${state.turn}] 완료: ${formatQuestLogLabel(quest)} → ${statusText}, 계약 ${contractValue}G + 보너스 ${bonusGold}G − 임금 ${totalWages}G = ${netGain >= 0 ? '+' : ''}${netGain}G (Gold ${previousGold}→${state.gold})${repPenalty > 0 ? `, 평판 -${repPenalty}` : ''}`;
+  const repNotes = [];
+  if (repGain > 0) {
+    repNotes.push(`평판 +${repGain}`);
+  }
+  if (repPenalty > 0) {
+    repNotes.push(`평판 -${repPenalty}`);
+  }
+  const repNoteText = repNotes.length > 0 ? `, ${repNotes.join(' / ')}` : '';
+  const baseMessage = `[T${state.turn}] 완료: ${formatQuestLogLabel(quest)} → ${statusText}, 계약 ${contractValue}G + 보너스 ${bonusGold}G − 임금 ${totalWages}G = ${netGain >= 0 ? '+' : ''}${netGain}G (Gold ${previousGold}→${state.gold})`;
 
   return {
-    completionMessage,
+    completionMessage: `${baseMessage}${repNoteText}`,
     replacement: generateQuest()
   };
 }
@@ -730,16 +831,22 @@ function ensureQuestSlots() {
     if (!Array.isArray(quest.assigned_merc_ids)) {
       quest.assigned_merc_ids = [];
     }
+    quest.tier = typeof quest.tier === 'string' && ['S', 'A', 'B', 'C'].includes(quest.tier) ? quest.tier : rollQuestTier();
+    quest.importance = typeof quest.importance === 'string' && CONFIG.WEIGHTS_BY_IMPORTANCE[quest.importance]
+      ? quest.importance
+      : pickQuestImportance(quest.tier);
     quest.stance = typeof quest.stance === 'string' && CONFIG.STANCE[quest.stance] ? quest.stance : null;
     const defaultDeadline = quest.turns_cost || CONFIG.QUEST_TURNS_MIN;
     const storedDeadline = Number(quest.deadline_turn);
     quest.deadline_turn = Number.isFinite(storedDeadline) && storedDeadline > 0 ? storedDeadline : defaultDeadline;
     quest.overdue = Boolean(quest.overdue);
     quest.progress = Math.max(0, Number(quest.progress) || 0);
-    quest.tempBonusGold = Math.max(0, Number(quest.tempBonusGold) || 0);
+    const storedBonus = Number.isFinite(quest.bonusGold) ? quest.bonusGold : quest.tempBonusGold;
+    quest.bonusGold = Math.max(0, Number(storedBonus) || 0);
     if (!Array.isArray(quest.journal)) {
       quest.journal = [];
     }
+    quest.contractProb = normalizeContractProb(quest.contractProb, quest.bids, state.rivals);
     quest.deleted = false;
     return quest;
   });
@@ -782,9 +889,18 @@ function normalizeQuest(quest, rivals = DEFAULT_RIVALS) {
     : generateQuestRequirements(turns_cost);
 
   const rewardValue = Number(quest.reward);
+  const tier = typeof quest.tier === 'string' && ['S', 'A', 'B', 'C'].includes(quest.tier)
+    ? quest.tier
+    : rollQuestTier();
+  const importance = typeof quest.importance === 'string' && CONFIG.WEIGHTS_BY_IMPORTANCE[quest.importance]
+    ? quest.importance
+    : pickQuestImportance(tier);
+
   const normalized = {
     id: typeof quest.id === 'string' ? quest.id : `quest_${Math.random().toString(36).slice(2, 8)}`,
     type: typeof quest.type === 'string' ? quest.type : 'dungeon',
+    tier,
+    importance,
     reward: clamp(isNaN(rewardValue) ? CONFIG.QUEST_REWARD_MIN : rewardValue, CONFIG.QUEST_REWARD_MIN, CONFIG.QUEST_REWARD_MAX),
     turns_cost,
     req,
@@ -818,8 +934,10 @@ function normalizeQuest(quest, rivals = DEFAULT_RIVALS) {
   normalized.deadline_turn = Number.isFinite(storedDeadline) && storedDeadline > 0 ? storedDeadline : turns_cost;
   normalized.overdue = Boolean(quest.overdue);
   normalized.progress = Math.max(0, Number(quest.progress) || 0);
-  normalized.tempBonusGold = Math.max(0, Number(quest.tempBonusGold) || 0);
+  const storedBonus = Number.isFinite(quest.bonusGold) ? quest.bonusGold : quest.tempBonusGold;
+  normalized.bonusGold = Math.max(0, Number(storedBonus) || 0);
   normalized.journal = Array.isArray(quest.journal) ? quest.journal.slice(-CONFIG.QUEST_JOURNAL_LIMIT) : [];
+  normalized.contractProb = normalizeContractProb(quest.contractProb, normalized.bids, rivals);
   return normalized;
 }
 
@@ -869,6 +987,33 @@ function normalizeQuestBids(bids, reward, rivals = DEFAULT_RIVALS) {
   };
 }
 
+function normalizeContractProb(contractProb, bids, rivals = DEFAULT_RIVALS) {
+  const normalized = { player: 0 };
+  const rivalList = Array.isArray(rivals) && rivals.length > 0 ? rivals : DEFAULT_RIVALS;
+  rivalList.forEach((rival) => {
+    normalized[rival.id] = 0;
+  });
+
+  if (contractProb && typeof contractProb === 'object') {
+    Object.keys(normalized).forEach((key) => {
+      const value = Number(contractProb[key]);
+      if (Number.isFinite(value)) {
+        normalized[key] = clamp(value, 0, 1);
+      }
+    });
+  }
+
+  if (Array.isArray(bids?.rivals)) {
+    bids.rivals.forEach((entry) => {
+      if (!(entry.id in normalized)) {
+        normalized[entry.id] = 0;
+      }
+    });
+  }
+
+  return normalized;
+}
+
 function normalizeRivals(rivals) {
   return rivals
     .map((rival) => {
@@ -878,7 +1023,7 @@ function normalizeRivals(rivals) {
       return {
         id: typeof rival.id === 'string' ? rival.id : `r${Math.random().toString(36).slice(2, 6)}`,
         name: typeof rival.name === 'string' ? rival.name : 'Rival Guild',
-        rep: Math.max(0, Number(rival.rep) || 0)
+        rep: clampRep(Number(rival.rep), DEFAULT_RIVALS[0]?.rep || CONFIG.REP_MIN)
       };
     })
     .filter(Boolean);
@@ -1374,6 +1519,27 @@ function openBidModal(quest, assignedMercs, stance) {
   inputWrapper.append(label, input);
   elements.modalBody.appendChild(inputWrapper);
 
+  const probabilityPreview = document.createElement('p');
+  probabilityPreview.className = 'modal-probability';
+  elements.modalBody.appendChild(probabilityPreview);
+
+  const updateProbabilityPreview = () => {
+    const rawValue = Number(input.value);
+    if (!Number.isFinite(rawValue) || rawValue < 1) {
+      probabilityPreview.textContent = '예상 낙찰 확률: 계산 불가';
+      return;
+    }
+    const bidValue = clamp(Math.round(rawValue), 1, 9999);
+    const { probabilities } = calculateContractProbabilities(quest, bidValue, assignedMercs);
+    const summary = formatProbabilityEntries(probabilities).join(' / ');
+    probabilityPreview.textContent = summary
+      ? `예상 낙찰 확률: ${summary}`
+      : '예상 낙찰 확률: 데이터 부족';
+  };
+
+  updateProbabilityPreview();
+  input.addEventListener('input', updateProbabilityPreview);
+
   const actions = document.createElement('div');
   actions.className = 'modal__actions';
 
@@ -1396,21 +1562,23 @@ function openBidModal(quest, assignedMercs, stance) {
       quest.bids = generateQuestBids(quest.reward);
     }
     quest.bids.player = bidValue;
-    const winner = determineBidWinner(quest, bidValue);
+    const outcome = resolveBidOutcome(quest, bidValue, assignedMercs);
+    quest.contractProb = normalizeContractProb(outcome.probabilities, quest.bids, state.rivals);
+    const winner = outcome.winner;
     quest.bids.winner = winner.type === 'player'
       ? { type: 'player', id: 'player', value: bidValue }
       : { type: 'rival', id: winner.id, value: winner.value };
 
-    const logMessage = buildBidLogMessage(quest, bidValue, winner);
+    const logMessage = buildBidLogMessage(quest, bidValue, winner, quest.contractProb);
     log(logMessage);
 
     if (winner.type === 'player') {
-      startQuestAfterBid(quest, assignedMercs, bidValue, stance);
+      startQuestAfterBid(quest, assignedMercs, bidValue, stance, quest.contractProb);
       closeModal();
       return;
     }
 
-    markQuestBidFailure(quest, winner);
+    markQuestBidFailure(quest, winner, quest.contractProb);
     save();
     render();
     closeModal();
@@ -1420,25 +1588,131 @@ function openBidModal(quest, assignedMercs, stance) {
   elements.modalBody.appendChild(actions);
 }
 
-function determineBidWinner(quest, playerBid) {
+function calculateContractProbabilities(quest, playerBid, assignedMercs) {
   const rivalEntries = Array.isArray(quest.bids?.rivals) ? quest.bids.rivals : [];
-  const bids = [
-    { type: 'player', id: 'player', value: playerBid },
-    ...rivalEntries.map((entry) => ({ type: 'rival', id: entry.id, value: entry.value }))
-  ];
-  bids.sort((a, b) => {
-    if (a.value === b.value) {
-      if (a.type === b.type) {
-        return 0;
-      }
-      return a.type === 'player' ? -1 : 1;
-    }
-    return a.value - b.value;
+  const rivalState = Array.isArray(state.rivals) && state.rivals.length > 0 ? state.rivals : DEFAULT_RIVALS;
+  const rivalMap = new Map(rivalState.map((rival) => [rival.id, rival]));
+
+  const participants = [];
+  const sanitizedBid = clamp(Math.round(playerBid), 1, 9999);
+  participants.push({
+    key: 'player',
+    type: 'player',
+    id: 'player',
+    value: sanitizedBid,
+    rep: clampRep(state.reputation, CONFIG.REP_MIN)
   });
-  return bids[0];
+
+  rivalEntries.forEach((entry) => {
+    const rival = rivalMap.get(entry.id) || { id: entry.id, rep: CONFIG.REP_MIN };
+    participants.push({
+      key: entry.id,
+      type: 'rival',
+      id: entry.id,
+      value: clamp(Math.round(entry.value), 1, 9999),
+      rep: clampRep(rival.rep, CONFIG.REP_MIN)
+    });
+  });
+
+  const bids = participants.map((participant) => participant.value);
+  const minBid = Math.min(...bids);
+  const maxBid = Math.max(...bids);
+  const weights = CONFIG.WEIGHTS_BY_IMPORTANCE[quest.importance] || CONFIG.WEIGHTS_BY_IMPORTANCE.gold;
+
+  const rivalParticipants = participants.filter((participant) => participant.type === 'rival');
+  const avgRivalRep = rivalParticipants.length > 0
+    ? rivalParticipants.reduce((sum, participant) => sum + (participant.rep || 0), 0) / rivalParticipants.length
+    : clampRep(CONFIG.REP_MIN);
+
+  const statsTerm = computePlayerStatsTerm(assignedMercs, quest);
+  const playerRepTerm = computePlayerRepTerm(avgRivalRep);
+
+  participants.forEach((participant) => {
+    const bidTerm = computeBidAdvantage(participant.value, minBid, maxBid);
+    const statsScore = participant.type === 'player' ? statsTerm : 0;
+    const repTerm = participant.type === 'player'
+      ? playerRepTerm
+      : computeRivalRepTerm(participant.rep);
+    participant.score = weights.bid * bidTerm + weights.stats * statsScore + weights.rep * repTerm;
+  });
+
+  const temperature = Number(CONFIG.BID_TEMP) || 1;
+  const exponentials = participants.map((participant) => Math.exp(participant.score / temperature));
+  const sumExp = exponentials.reduce((sum, value) => sum + value, 0) || 1;
+  const probabilities = {};
+  participants.forEach((participant, index) => {
+    probabilities[participant.key] = exponentials[index] / sumExp;
+  });
+
+  return { participants, probabilities };
 }
 
-function buildBidLogMessage(quest, playerBid, winner) {
+function resolveBidOutcome(quest, playerBid, assignedMercs) {
+  const calculation = calculateContractProbabilities(quest, playerBid, assignedMercs);
+  const winnerKey = sampleFromProbabilities(calculation.participants, calculation.probabilities);
+  const winner = calculation.participants.find((participant) => participant.key === winnerKey)
+    || calculation.participants[0];
+  return { winner, probabilities: calculation.probabilities };
+}
+
+function sampleFromProbabilities(participants, probabilities) {
+  if (!Array.isArray(participants) || participants.length === 0) {
+    return null;
+  }
+  const randomValue = Math.random();
+  let cumulative = 0;
+  for (const participant of participants) {
+    const probability = Number(probabilities?.[participant.key]) || 0;
+    cumulative += probability;
+    if (randomValue <= cumulative) {
+      return participant.key;
+    }
+  }
+  return participants[participants.length - 1].key;
+}
+
+function computeBidAdvantage(value, min, max) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  if (max === min) {
+    return 0.5;
+  }
+  return clamp((max - value) / (max - min), 0, 1);
+}
+
+function computePlayerStatsTerm(assignedMercs, quest) {
+  let totals = { atk: 0, def: 0, stam: 0 };
+  if (Array.isArray(assignedMercs) && assignedMercs.length > 0) {
+    assignedMercs.forEach((merc) => {
+      totals.atk += Number(merc.atk) || 0;
+      totals.def += Number(merc.def) || 0;
+      totals.stam += Number(merc.stamina) || 0;
+    });
+  } else if (quest) {
+    totals = getQuestAssignedTotals(quest);
+  }
+  const requirementTotal = Math.max(1, (quest?.req?.atk || 0) + (quest?.req?.def || 0) + (quest?.req?.stam || 0));
+  const suppliedTotal = (totals.atk || 0) + (totals.def || 0) + (totals.stam || 0);
+  const ratio = (suppliedTotal - requirementTotal) / requirementTotal;
+  return clamp(ratio, 0, 1);
+}
+
+function computePlayerRepTerm(avgRivalRep) {
+  const ourRep = clampRep(state.reputation, CONFIG.REP_MIN);
+  const baseline = Math.max(1, Number(avgRivalRep) || 1);
+  const value = (ourRep / baseline) * 0.5 + 0.5;
+  return clamp(value, 0, 1);
+}
+
+function computeRivalRepTerm(rivalRep) {
+  const ourRep = clampRep(state.reputation, CONFIG.REP_MIN);
+  const baseline = Math.max(1, ourRep || 1);
+  const value = (clampRep(rivalRep, CONFIG.REP_MIN) / baseline) * 0.5 + 0.5;
+  return clamp(value, 0, 1);
+}
+
+function buildBidLogMessage(quest, playerBid, winner, probabilities) {
   const rivalParts = Array.isArray(quest.bids?.rivals)
     ? quest.bids.rivals.map((entry) => {
         const rival = getRivalById(entry.id);
@@ -1450,10 +1724,12 @@ function buildBidLogMessage(quest, playerBid, winner) {
   const winnerName = winner.type === 'player'
     ? 'Player'
     : formatRivalDisplayName((getRivalById(winner.id) || {}).name || 'Rival');
-  return `[T${state.turn}] 입찰: Player ${playerBid}G${rivalsSummary ? ` vs ${rivalsSummary}` : ''} → 낙찰: ${winnerName}`;
+  const probabilitySummary = formatProbabilityEntries(probabilities).join(' / ');
+  const probabilityNote = probabilitySummary ? ` (확률: ${probabilitySummary})` : '';
+  return `[T${state.turn}] 입찰: Player ${playerBid}G${rivalsSummary ? ` vs ${rivalsSummary}` : ''} → 낙찰: ${winnerName}${probabilityNote}`;
 }
 
-function startQuestAfterBid(quest, assignedMercs, playerBid, stance) {
+function startQuestAfterBid(quest, assignedMercs, playerBid, stance, probabilities) {
   quest.status = 'in_progress';
   quest.remaining_turns = quest.turns_cost;
   quest.assigned_merc_ids = assignedMercs.map((merc) => merc.id);
@@ -1465,7 +1741,8 @@ function startQuestAfterBid(quest, assignedMercs, playerBid, stance) {
   quest.progress = 0;
   quest.deadline_turn = Math.max(1, Number(quest.turns_cost) || CONFIG.QUEST_TURNS_MIN);
   quest.overdue = false;
-  quest.tempBonusGold = 0;
+  quest.bonusGold = 0;
+  quest.contractProb = normalizeContractProb(probabilities, quest.bids, state.rivals);
   quest.stance = typeof stance === 'string' ? stance : 'meticulous';
   quest.journal = Array.isArray(quest.journal) ? quest.journal.slice(-CONFIG.QUEST_JOURNAL_LIMIT) : [];
   assignedMercs.forEach((merc) => {
@@ -1484,7 +1761,7 @@ function startQuestAfterBid(quest, assignedMercs, playerBid, stance) {
   refreshAssetChecklist();
 }
 
-function markQuestBidFailure(quest, winner) {
+function markQuestBidFailure(quest, winner, probabilities) {
   quest.status = 'bid_failed';
   quest.remaining_turns = 0;
   quest.assigned_merc_ids = [];
@@ -1496,7 +1773,8 @@ function markQuestBidFailure(quest, winner) {
   quest.deadline_turn = quest.turns_cost || CONFIG.QUEST_TURNS_MIN;
   quest.overdue = false;
   quest.progress = 0;
-  quest.tempBonusGold = 0;
+  quest.bonusGold = 0;
+  quest.contractProb = normalizeContractProb(probabilities, quest.bids, state.rivals);
   quest.journal = [];
   clearTempQuestDraft(quest.id);
 }
@@ -1543,6 +1821,7 @@ function render() {
   if (elements.reputationValue) {
     elements.reputationValue.textContent = `${state.reputation}`;
   }
+  renderCalendar();
   renderQuestSpawnRate();
   const recruitLocked = CONFIG.RECRUIT_ONCE_PER_TURN && state.lastRecruitTurn === state.turn;
   elements.recruitBtn.disabled = recruitLocked;
@@ -1551,6 +1830,7 @@ function render() {
   renderQuests();
   renderLogs();
   renderAssetChecklist();
+  renderBoardFormulaState();
 }
 
 /** Render the mercenary list. */
@@ -1676,52 +1956,57 @@ function renderQuests() {
     card.className = 'quest-card';
     const isInProgress = quest.status === 'in_progress';
     const isBidFailed = quest.status === 'bid_failed';
+    const isOverdue = Boolean(quest.overdue);
     if (isInProgress) {
       card.classList.add('quest-card--in-progress');
     }
-    if (quest.overdue) {
-      card.classList.add('quest-card--overdue');
-    }
     if (isBidFailed) {
       card.classList.add('quest-card--bid-failed');
+    }
+    if (isOverdue) {
+      card.classList.add('quest-card--overdue');
     }
 
     const header = document.createElement('div');
     header.className = 'quest-card__header';
     const title = document.createElement('strong');
+    const tierLabel = quest.tier ? `${quest.tier}급 ` : '';
     if (isInProgress) {
       const remainingTurns = Math.max(0, Number(quest.remaining_turns) || 0);
-      title.textContent = `던전 탐험 (남은 ${remainingTurns}턴)`;
+      title.textContent = `${tierLabel}던전 탐험 (남은 ${remainingTurns}턴)`;
     } else {
-      title.textContent = '던전 탐험';
+      title.textContent = `${tierLabel}던전 탐험`;
     }
 
     const headerActions = document.createElement('div');
     headerActions.className = 'quest-card__header-actions';
 
+    const meta = document.createElement('div');
+    meta.className = 'quest-card__meta';
+
     const reward = document.createElement('span');
     reward.textContent = `보상 ${quest.reward}G`;
+    meta.appendChild(reward);
+
+    const importanceBadge = document.createElement('span');
+    importanceBadge.className = `quest-card__importance quest-card__importance--${quest.importance}`;
+    importanceBadge.textContent = `중요도: ${formatImportanceLabel(quest.importance)}`;
+    meta.appendChild(importanceBadge);
+
     const statusBadge = document.createElement('span');
     statusBadge.className = 'quest-card__status-badge';
     const visibleTurns = Math.max(0, Number(quest.remaining_visible_turns) || 0);
     if (isInProgress) {
-      if (quest.overdue) {
-        statusBadge.textContent = '기한 초과';
-        statusBadge.classList.add('quest-card__status-badge--overdue');
-      } else {
-        statusBadge.textContent = '진행 중';
-        statusBadge.classList.add('quest-card__status-badge--active');
-      }
+      statusBadge.textContent = isOverdue ? '기한 초과' : '진행 중';
+      statusBadge.classList.add(isOverdue ? 'quest-card__status-badge--overdue' : 'quest-card__status-badge--active');
     } else if (isBidFailed) {
       statusBadge.textContent = '낙찰 실패';
       statusBadge.classList.add('quest-card__status-badge--failed');
     } else {
       statusBadge.textContent = `대기 중 (만료까지 ${visibleTurns}턴)`;
     }
+    meta.appendChild(statusBadge);
 
-    const meta = document.createElement('div');
-    meta.className = 'quest-card__meta';
-    meta.append(reward, statusBadge);
     if (isInProgress && quest.stance) {
       const stanceTag = document.createElement('span');
       stanceTag.className = `quest-card__stance quest-card__stance--${quest.stance}`;
@@ -1742,7 +2027,7 @@ function renderQuests() {
 
     const stats = document.createElement('div');
     stats.className = 'quest-card__stats';
-    stats.innerHTML = `<span>소요 ${quest.turns_cost} 턴</span><span>유형: ${quest.type}</span>`;
+    stats.innerHTML = `<span>소요 ${quest.turns_cost}턴</span><span>유형: ${quest.type}</span>`;
 
     const requirements = document.createElement('div');
     requirements.className = 'quest-card__requirements';
@@ -1764,13 +2049,15 @@ function renderQuests() {
         .filter(Boolean)
         .map((merc) => merc.name);
       assigned.textContent = assignedNames.length > 0 ? `투입: ${assignedNames.join(', ')}` : '투입 용병 없음';
+    } else if (!isBidFailed) {
+      assigned.textContent = '대기 중: 용병 배치 필요';
     }
 
     const selectedStats = document.createElement('div');
     selectedStats.className = 'quest-card__selected-stats';
     const statsLabel = document.createElement('span');
     statsLabel.className = 'quest-card__selected-stats-label';
-    statsLabel.textContent = '현재 선택 용병 합계';
+    statsLabel.textContent = '현재 용병 합계';
     selectedStats.appendChild(statsLabel);
 
     const totals = getQuestAssignedTotals(quest);
@@ -1784,14 +2071,73 @@ function renderQuests() {
       const requirement = requirementsMap[key] || 0;
       const stat = document.createElement('span');
       stat.className = 'quest-card__stat';
-      if (statValue >= requirement) {
-        stat.classList.add('quest-card__stat--ok');
-      } else {
-        stat.classList.add('quest-card__stat--insufficient');
-      }
+      stat.classList.add(statValue >= requirement ? 'quest-card__stat--ok' : 'quest-card__stat--insufficient');
       stat.textContent = `${label} ${statValue}`;
       selectedStats.appendChild(stat);
     });
+
+    const progressSection = document.createElement('div');
+    progressSection.className = 'quest-card__progress';
+    const progressWrapper = document.createElement('div');
+    progressWrapper.className = 'progress-bar';
+    if (isOverdue) {
+      progressWrapper.classList.add('progress-bar--overdue');
+    }
+    const progressFill = document.createElement('div');
+    progressFill.className = 'progress-bar__fill';
+    const plannedTurns = Math.max(1, Number(quest.turns_cost) || 1);
+    const currentProgress = Math.max(0, Number(quest.progress) || 0);
+    const clampedProgress = Math.min(currentProgress, plannedTurns);
+    const progressPercent = Math.max(0, Math.min(100, (clampedProgress / plannedTurns) * 100));
+    progressFill.style.width = `${progressPercent}%`;
+    const progressToken = document.createElement('span');
+    progressToken.className = 'progress-bar__token';
+    progressToken.textContent = '●';
+    const tokenPercent = Math.min(98, Math.max(2, progressPercent));
+    progressToken.style.left = `${tokenPercent}%`;
+    progressWrapper.append(progressFill, progressToken);
+
+    const progressLabel = document.createElement('div');
+    progressLabel.className = 'progress-bar__label';
+    if (isInProgress) {
+      const overdueTurns = Math.max(0, currentProgress - plannedTurns);
+      progressLabel.textContent = overdueTurns > 0
+        ? `진행 ${currentProgress}턴 (기한 초과 +${overdueTurns})`
+        : `진행 ${currentProgress}턴 / 목표 ${plannedTurns}턴`;
+    } else if (isBidFailed) {
+      progressLabel.textContent = '낙찰 실패 - 진행 불가';
+    } else {
+      progressLabel.textContent = `준비 중 · 예상 ${plannedTurns}턴`;
+    }
+
+    progressSection.append(progressWrapper, progressLabel);
+
+    if (isInProgress) {
+      const bonusLabel = document.createElement('div');
+      bonusLabel.className = 'progress-bar__bonus';
+      bonusLabel.textContent = quest.bonusGold > 0
+        ? `추가 골드 확보 +${quest.bonusGold}G`
+        : '추가 보상 탐색 중';
+      progressSection.appendChild(bonusLabel);
+
+      const journal = document.createElement('div');
+      journal.className = 'quest-card__journal';
+      const recentEntries = Array.isArray(quest.journal) ? quest.journal.slice(-2) : [];
+      if (recentEntries.length === 0) {
+        const emptyEntry = document.createElement('div');
+        emptyEntry.className = 'quest-card__journal-entry';
+        emptyEntry.textContent = '최근 탐험 로그 없음';
+        journal.appendChild(emptyEntry);
+      } else {
+        recentEntries.forEach((entry) => {
+          const line = document.createElement('div');
+          line.className = 'quest-card__journal-entry';
+          line.textContent = entry;
+          journal.appendChild(line);
+        });
+      }
+      progressSection.appendChild(journal);
+    }
 
     const actions = document.createElement('div');
     actions.className = 'quest-card__actions';
@@ -1811,6 +2157,13 @@ function renderQuests() {
     }
     actions.appendChild(runBtn);
 
+    if (DEBUG_MODE) {
+      const probElement = createProbabilityDebugLine(quest);
+      if (probElement) {
+        actions.appendChild(probElement);
+      }
+    }
+
     card.append(header, stats, requirements);
     if (rivalBids) {
       card.appendChild(rivalBids);
@@ -1819,57 +2172,7 @@ function renderQuests() {
       card.appendChild(assigned);
     }
     card.appendChild(selectedStats);
-    if (isInProgress) {
-      const exploration = document.createElement('div');
-      exploration.className = 'quest-card__exploration';
-
-      const progressWrapper = document.createElement('div');
-      progressWrapper.className = 'progress-bar';
-      const progressFill = document.createElement('div');
-      progressFill.className = 'progress-bar__fill';
-      const progressBase = Math.max(1, Number(quest.deadline_turn) || quest.turns_cost || 1);
-      const currentProgress = Math.max(0, Number(quest.progress) || 0);
-      const progressPercent = Math.min(100, Math.max(0, (currentProgress / progressBase) * 100));
-      progressFill.style.width = `${progressPercent}%`;
-      const progressToken = document.createElement('span');
-      progressToken.className = 'progress-bar__token';
-      progressToken.textContent = '●';
-      progressToken.style.left = `${progressPercent}%`;
-      progressWrapper.append(progressFill, progressToken);
-
-      const progressLabel = document.createElement('div');
-      progressLabel.className = 'progress-bar__label';
-      const overdueTurns = Math.max(0, currentProgress - progressBase);
-      progressLabel.textContent = overdueTurns > 0
-        ? `진행 ${currentProgress}턴 (기한 초과 +${overdueTurns})`
-        : `진행 ${currentProgress}턴 / 기한 ${progressBase}턴`;
-
-      const bonusLabel = document.createElement('div');
-      bonusLabel.className = 'progress-bar__bonus';
-      bonusLabel.textContent = quest.tempBonusGold > 0
-        ? `추가 골드 확보 +${quest.tempBonusGold}G`
-        : '추가 보상 탐색 중';
-
-      const journal = document.createElement('div');
-      journal.className = 'quest-card__journal';
-      const recentEntries = Array.isArray(quest.journal) ? quest.journal.slice(-2) : [];
-      if (recentEntries.length === 0) {
-        const emptyEntry = document.createElement('div');
-        emptyEntry.className = 'quest-card__journal-entry';
-        emptyEntry.textContent = '최근 탐험 로그 없음';
-        journal.appendChild(emptyEntry);
-      } else {
-        recentEntries.forEach((entry) => {
-          const line = document.createElement('div');
-          line.className = 'quest-card__journal-entry';
-          line.textContent = entry;
-          journal.appendChild(line);
-        });
-      }
-
-      exploration.append(progressWrapper, progressLabel, bonusLabel, journal);
-      card.appendChild(exploration);
-    }
+    card.appendChild(progressSection);
     if (isBidFailed) {
       const failureNote = document.createElement('div');
       failureNote.className = 'quest-card__failure-note';
@@ -1912,6 +2215,52 @@ function formatRivalBidSummary(quest) {
   return rivals.join(' · ');
 }
 
+function formatImportanceLabel(importance) {
+  switch (importance) {
+    case 'reputation':
+      return '평판';
+    case 'stats':
+      return '능력치';
+    case 'gold':
+      return '금전';
+    default:
+      return '기타';
+  }
+}
+
+function formatProbabilityEntries(probabilities) {
+  if (!probabilities || typeof probabilities !== 'object') {
+    return [];
+  }
+  const entries = [];
+  const playerProb = Number(probabilities.player);
+  if (Number.isFinite(playerProb) && playerProb > 0) {
+    entries.push(`Player ${Math.round(playerProb * 100)}%`);
+  }
+  const rivals = Array.isArray(state.rivals) && state.rivals.length > 0 ? state.rivals : DEFAULT_RIVALS;
+  rivals.forEach((rival) => {
+    const value = Number(probabilities[rival.id]);
+    if (Number.isFinite(value) && value > 0) {
+      entries.push(`${formatRivalDisplayName(rival.name)} ${Math.round(value * 100)}%`);
+    }
+  });
+  return entries;
+}
+
+function createProbabilityDebugLine(quest) {
+  if (!quest) {
+    return null;
+  }
+  const entries = formatProbabilityEntries(quest.contractProb);
+  if (entries.length === 0) {
+    return null;
+  }
+  const container = document.createElement('div');
+  container.className = 'quest-card__prob-debug';
+  container.textContent = entries.join(' / ');
+  return container;
+}
+
 function getRivalById(id) {
   if (!id) {
     return null;
@@ -1949,6 +2298,48 @@ function renderQuestSpawnRate() {
     return;
   }
   elements.questSpawnRate.textContent = formatSpawnRate();
+}
+
+function renderCalendar() {
+  if (!elements.calendarDisplay) {
+    return;
+  }
+  const current = getCalendarDate();
+  const monthLabel = current.month.toString().padStart(2, '0');
+  elements.calendarDisplay.textContent = `길드력 ${current.year}년 ${monthLabel}월`;
+}
+
+function getCalendarDate() {
+  const startYear = Number(CONFIG.START_YEAR) || 0;
+  const startMonth = Math.max(1, Math.min(12, Number(CONFIG.START_MONTH) || 1));
+  const offset = Math.max(0, Number(state.turn) - 1);
+  const totalMonths = startYear * 12 + (startMonth - 1) + offset;
+  const year = Math.floor(totalMonths / 12);
+  const month = (totalMonths % 12) + 1;
+  return { year, month };
+}
+
+function toggleBoardFormula() {
+  if (!elements.formulaBox) {
+    return;
+  }
+  const isOpen = elements.formulaBox.classList.toggle('board-formula--open');
+  renderBoardFormulaState(isOpen);
+}
+
+function renderBoardFormulaState(forcedState) {
+  if (!elements.formulaBox || !elements.formulaToggle || !elements.formulaContent) {
+    return;
+  }
+  const isOpen = typeof forcedState === 'boolean'
+    ? forcedState
+    : elements.formulaBox.classList.contains('board-formula--open');
+  elements.formulaBox.classList.toggle('board-formula--open', isOpen);
+  elements.formulaContent.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+  elements.formulaToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  elements.formulaToggle.textContent = isOpen
+    ? '📌 경제·평판 공식 닫기'
+    : '📌 경제·평판 공식 보기';
 }
 
 /**
@@ -2041,6 +2432,11 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function clampRep(value, fallback = CONFIG.REP_MIN) {
+  const numeric = Number.isFinite(value) ? value : fallback;
+  return clamp(numeric, CONFIG.REP_MIN, CONFIG.REP_MAX);
+}
+
 function randomVisibleTurns() {
   const min = Math.max(1, Number(CONFIG.QUEST_VISIBLE_TURNS_MIN) || 1);
   const maxCandidate = Math.max(min, Number(CONFIG.QUEST_VISIBLE_TURNS_MAX) || min);
@@ -2078,6 +2474,8 @@ function formatSpawnRate() {
  * @typedef {Object} Quest
  * @property {string} id
  * @property {'dungeon'} type
+ * @property {'S'|'A'|'B'|'C'} tier
+ * @property {'gold'|'reputation'|'stats'} importance
  * @property {number} reward
  * @property {number} turns_cost
  * @property {{atk: number, def: number, stam: number}} req
@@ -2092,7 +2490,8 @@ function formatSpawnRate() {
  * @property {number} deadline_turn
  * @property {boolean} overdue
  * @property {number} progress
- * @property {number} tempBonusGold
+ * @property {number} bonusGold
+ * @property {{[key: string]: number}} contractProb
  * @property {string[]} journal
  *
  * @typedef {{id: string, name: string, rep: number}} Rival
