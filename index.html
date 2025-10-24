@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Revival Guild</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="top-bar">
+      <div class="top-bar__title">Revival Guild</div>
+      <div class="top-bar__resources">
+        <span class="resource-label">💰 Gold</span>
+        <span id="gold-value">0</span>
+      </div>
+      <div class="top-bar__actions">
+        <button id="recruit-btn" class="btn btn--primary">용병 모집</button>
+        <button id="new-turn-btn" class="btn btn--accent">턴 진행</button>
+      </div>
+    </header>
+
+    <section class="panel asset-panel">
+      <div class="panel__header">
+        <h2>📦 Missing Assets</h2>
+      </div>
+      <div id="asset-note" class="asset-panel__note"></div>
+      <ul id="missing-assets-list" class="asset-list">
+        <li class="asset-list__item asset-list__item--loading">에셋 확인 중...</li>
+      </ul>
+    </section>
+
+    <main class="main-content">
+      <section class="panel merc-panel">
+        <div class="panel__header">
+          <h2>고용된 용병</h2>
+        </div>
+        <div id="merc-list" class="merc-list empty-state">
+          아직 고용된 용병이 없습니다.
+        </div>
+      </section>
+
+      <section class="panel quest-panel">
+        <div class="panel__header">
+          <h2>던전 퀘스트</h2>
+        </div>
+        <div id="quest-list" class="quest-list">
+          <div class="empty-state">턴을 진행해 퀘스트를 생성하세요.</div>
+        </div>
+      </section>
+    </main>
+
+    <section class="log-panel panel">
+      <div class="panel__header">
+        <h2>길드 기록</h2>
+      </div>
+      <ul id="log-list" class="log-list"></ul>
+    </section>
+  </div>
+
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div id="modal-content" class="modal">
+      <div class="modal__header">
+        <h3 id="modal-title">Modal Title</h3>
+        <button id="modal-close" class="modal__close" aria-label="Close">×</button>
+      </div>
+      <div id="modal-body" class="modal__body"></div>
+    </div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>
