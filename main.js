@@ -86,6 +86,20 @@ const DEFAULT_RIVALS = [
   { id: 'r3', name: 'Ashen Company', rep: 61 }
 ];
 
+const guildLevel = 1;
+
+const CURRENCY_LOOT_TABLE = [
+  { name: '고대 주화 꾸러미', description: '폐허에서 회수한 금빛 주화.', min: 25, max: 70 },
+  { name: '연합 교역권', description: '길드 연합 상인에게 통용되는 수표.', min: 40, max: 90 },
+  { name: '마나 파편 묶음', description: '연구가들의 관심을 받는 환광 파편.', min: 55, max: 120 }
+];
+
+const uiState = {
+  activeMainTab: 'quests',
+  activeInventoryTab: 'currency',
+  backgroundDimmed: false
+};
+
 /** @type {{start_gold: number, merc_names: string[]}} */
 let seedData = { start_gold: CONFIG.START_GOLD, merc_names: [] };
 
@@ -98,7 +112,8 @@ let state = {
   log: [],
   lastRecruitTurn: null,
   reputation: 25,
-  rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival }))
+  rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival })),
+  inventory: createEmptyInventory()
 };
 
 let currentRecruitCandidates = [];
@@ -107,6 +122,10 @@ let assetChecklist = [];
 let assetChecklistLoading = true;
 let lastAssetLogSignature = '';
 const tempSelections = {};
+
+function createEmptyInventory() {
+  return { equip: [], currency: [], consumable: [] };
+}
 
 const EXPLORATION_SCENARIOS = {
   encounter: ['좁은 복도에서 매복을 뚫고 전진했습니다.', '고블린 순찰대를 분산시키고 길을 확보했습니다.', '갑작스러운 함정과 맞닥뜨렸지만 재빠르게 회피했습니다.'],
@@ -139,7 +158,15 @@ const elements = {
   calendarDisplay: document.getElementById('calendar-display'),
   formulaToggle: document.getElementById('board-formula-toggle'),
   formulaContent: document.getElementById('board-formula-content'),
-  formulaBox: document.getElementById('board-formula')
+  formulaBox: document.getElementById('board-formula'),
+  backgroundToggle: document.getElementById('background-toggle'),
+  mainTabs: document.getElementById('main-tabs'),
+  mainTabPanels: document.querySelectorAll('[data-tab-panel]'),
+  inventoryTabs: document.getElementById('inventory-tabs'),
+  inventoryPanels: document.querySelectorAll('[data-inventory-panel]'),
+  inventoryEquipList: document.getElementById('inventory-equip'),
+  inventoryCurrencyList: document.getElementById('inventory-currency'),
+  inventoryConsumableList: document.getElementById('inventory-consumable')
 };
 
 /**
@@ -182,6 +209,10 @@ function bindEvents() {
   if (elements.formulaToggle) {
     elements.formulaToggle.addEventListener('click', toggleBoardFormula);
   }
+  if (elements.backgroundToggle) {
+    elements.backgroundToggle.addEventListener('click', toggleBackgroundEmphasis);
+  }
+  bindTabNavigation();
   elements.modalOverlay.addEventListener('click', (event) => {
     if (event.target === elements.modalOverlay) {
       closeModal();
@@ -213,6 +244,205 @@ function computeSelectedStats(mercIds) {
     totals.stam += Number(merc.stamina) || 0;
   });
   return totals;
+}
+
+function bindTabNavigation() {
+  const mainButtons = elements.mainTabs
+    ? Array.from(elements.mainTabs.querySelectorAll('[data-main-tab]'))
+    : [];
+  mainButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const tab = button.dataset.mainTab;
+      if (tab) {
+        switchMainTab(tab);
+      }
+    });
+  });
+
+  const inventoryButtons = elements.inventoryTabs
+    ? Array.from(elements.inventoryTabs.querySelectorAll('[data-inventory-tab]'))
+    : [];
+  inventoryButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const tab = button.dataset.inventoryTab;
+      if (tab) {
+        switchInventoryTab(tab);
+      }
+    });
+  });
+
+  updateTabVisibility();
+}
+
+function switchMainTab(tabId) {
+  if (!tabId) {
+    return;
+  }
+  if (uiState.activeMainTab !== tabId) {
+    uiState.activeMainTab = tabId;
+  }
+  updateTabVisibility();
+}
+
+function switchInventoryTab(tabId) {
+  if (!tabId) {
+    return;
+  }
+  if (uiState.activeInventoryTab !== tabId) {
+    uiState.activeInventoryTab = tabId;
+  }
+  updateTabVisibility();
+}
+
+function updateTabVisibility() {
+  const mainButtons = elements.mainTabs
+    ? Array.from(elements.mainTabs.querySelectorAll('[data-main-tab]'))
+    : [];
+  mainButtons.forEach((button) => {
+    const key = button.dataset.mainTab;
+    button.classList.toggle('is-active', key === uiState.activeMainTab);
+  });
+
+  const tabPanels = Array.from(elements.mainTabPanels || []);
+  tabPanels.forEach((panel) => {
+    const key = panel.dataset.tabPanel;
+    panel.classList.toggle('is-active', key === uiState.activeMainTab);
+  });
+
+  const inventoryButtons = elements.inventoryTabs
+    ? Array.from(elements.inventoryTabs.querySelectorAll('[data-inventory-tab]'))
+    : [];
+  inventoryButtons.forEach((button) => {
+    const key = button.dataset.inventoryTab;
+    button.classList.toggle('is-active', key === uiState.activeInventoryTab);
+  });
+
+  const inventoryLists = {
+    equip: elements.inventoryEquipList,
+    currency: elements.inventoryCurrencyList,
+    consumable: elements.inventoryConsumableList
+  };
+  Object.entries(inventoryLists).forEach(([key, list]) => {
+    if (list) {
+      list.classList.toggle('is-active', key === uiState.activeInventoryTab);
+    }
+  });
+}
+
+function toggleBackgroundEmphasis() {
+  uiState.backgroundDimmed = !uiState.backgroundDimmed;
+  updatePanelDimming();
+}
+
+function updatePanelDimming() {
+  const panels = Array.from(document.querySelectorAll('.panel'));
+  panels.forEach((panel) => {
+    panel.classList.toggle('dimmed', uiState.backgroundDimmed);
+  });
+  if (elements.backgroundToggle) {
+    elements.backgroundToggle.textContent = uiState.backgroundDimmed ? '배경 강조 해제' : '배경 강조';
+  }
+}
+
+function renderInventory() {
+  if (!state.inventory || typeof state.inventory !== 'object') {
+    state.inventory = createEmptyInventory();
+  }
+  renderInventoryList('equip', state.inventory.equip);
+  renderInventoryList('currency', state.inventory.currency);
+  renderInventoryList('consumable', state.inventory.consumable);
+}
+
+function renderInventoryList(category, items) {
+  const listMap = {
+    equip: elements.inventoryEquipList,
+    currency: elements.inventoryCurrencyList,
+    consumable: elements.inventoryConsumableList
+  };
+  const list = listMap[category];
+  if (!list) {
+    return;
+  }
+  list.innerHTML = '';
+  if (!Array.isArray(items) || items.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'inventory-empty';
+    empty.textContent = category === 'currency'
+      ? '획득한 재화가 없습니다.'
+      : '보관 중인 아이템이 없습니다.';
+    list.appendChild(empty);
+    return;
+  }
+
+  items.forEach((item) => {
+    const entry = document.createElement('li');
+    entry.className = 'inventory-item';
+
+    const details = document.createElement('div');
+    details.className = 'inventory-item__details';
+
+    const name = document.createElement('strong');
+    name.textContent = item.name || '미상 재화';
+    details.appendChild(name);
+
+    if (item.description) {
+      const desc = document.createElement('span');
+      desc.textContent = item.description;
+      details.appendChild(desc);
+    }
+
+    const totalValue = Math.max(0, Number(item.value) || 0) * Math.max(1, Number(item.quantity) || 1);
+    const valueLine = document.createElement('span');
+    valueLine.className = 'inventory-item__value';
+    const quantityText = Number(item.quantity) > 1 ? `x${item.quantity} · ` : '';
+    valueLine.textContent = `${quantityText}가치 ${totalValue}G`;
+    details.appendChild(valueLine);
+
+    entry.appendChild(details);
+
+    const actions = document.createElement('div');
+    actions.className = 'inventory-item__actions';
+
+    const equipBtn = document.createElement('button');
+    equipBtn.className = 'btn btn--primary btn--disabled';
+    equipBtn.textContent = '착용';
+    equipBtn.disabled = true;
+    actions.appendChild(equipBtn);
+
+    const sellBtn = document.createElement('button');
+    sellBtn.className = 'btn btn--accent';
+    sellBtn.textContent = '판매';
+    if (category === 'currency') {
+      sellBtn.addEventListener('click', () => sellInventoryItem(item.id));
+    } else {
+      sellBtn.disabled = true;
+      sellBtn.classList.add('btn--disabled');
+    }
+    actions.appendChild(sellBtn);
+
+    entry.appendChild(actions);
+    list.appendChild(entry);
+  });
+}
+
+function sellInventoryItem(itemId) {
+  if (!itemId || !state.inventory || !Array.isArray(state.inventory.currency)) {
+    return;
+  }
+  const index = state.inventory.currency.findIndex((item) => item.id === itemId);
+  if (index === -1) {
+    return;
+  }
+  const [item] = state.inventory.currency.splice(index, 1);
+  const quantity = Math.max(1, Number(item.quantity) || 1);
+  const unitValue = Math.max(0, Number(item.value) || 0);
+  const totalValue = unitValue * quantity;
+  if (totalValue > 0) {
+    state.gold += totalValue;
+  }
+  log(`[T${state.turn}] 창고 판매: ${item.name}을(를) ${totalValue}G에 판매했습니다.`);
+  save();
+  render();
 }
 
 function getTempQuestDraft(questId) {
@@ -303,7 +533,8 @@ function load() {
         log: Array.isArray(parsed.log) ? parsed.log.slice(-CONFIG.LOG_LIMIT) : [],
         lastRecruitTurn: typeof parsed.lastRecruitTurn === 'number' ? parsed.lastRecruitTurn : null,
         reputation: clampRep(Number(parsed.reputation), 25),
-        rivals: normalizedRivals
+        rivals: normalizedRivals,
+        inventory: normalizeInventory(parsed.inventory)
       };
       loadedFromStorage = true;
     } catch (error) {
@@ -320,7 +551,8 @@ function load() {
       log: [],
       lastRecruitTurn: null,
       reputation: 25,
-      rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival }))
+      rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival })),
+      inventory: createEmptyInventory()
     };
   }
 
@@ -344,7 +576,8 @@ function save() {
     log: state.log,
     lastRecruitTurn: state.lastRecruitTurn,
     reputation: state.reputation,
-    rivals: state.rivals
+    rivals: state.rivals,
+    inventory: state.inventory
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
 }
@@ -579,8 +812,11 @@ function newTurn() {
           addQuestJournalEntry(quest, '일정 지연: 추가 탐색을 진행합니다.');
           return quest;
         }
-        const { completionMessage, replacement } = finalizeQuest(quest);
+        const { completionMessage, replacement, lootMessage } = finalizeQuest(quest);
         completionLogs.push(completionMessage);
+        if (lootMessage) {
+          completionLogs.push(lootMessage);
+        }
         return replacement;
       }
       return quest;
@@ -747,6 +983,35 @@ function generateQuestRequirements(turns) {
   };
 }
 
+function maybeGenerateQuestLoot(quest) {
+  if (!state.inventory || typeof state.inventory !== 'object') {
+    state.inventory = createEmptyInventory();
+  }
+  const dropRoll = Math.random();
+  if (dropRoll >= 0.15) {
+    return null;
+  }
+  const lootTable = Array.isArray(CURRENCY_LOOT_TABLE) && CURRENCY_LOOT_TABLE.length > 0
+    ? CURRENCY_LOOT_TABLE
+    : [{ name: '신비한 재화', description: '', min: 20, max: 60 }];
+  const entry = randomChoice(lootTable) || lootTable[0];
+  const minValue = Math.max(1, Number(entry.min) || 1);
+  const maxValue = Math.max(minValue, Number(entry.max) || minValue);
+  const amount = randomInt(minValue, maxValue);
+  const item = {
+    id: `cur_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    name: entry.name,
+    description: entry.description || '',
+    value: amount,
+    quantity: 1
+  };
+  state.inventory.currency.push(item);
+  return {
+    item,
+    log: `[T${state.turn}] ${formatQuestLogLabel(quest)}에서 ${item.name}을(를) 확보했습니다. (가치 ${item.value}G)`
+  };
+}
+
 /**
  * Finalize a quest that has completed this turn.
  * @param {Quest} quest
@@ -794,9 +1059,12 @@ function finalizeQuest(quest) {
   const repNoteText = repNotes.length > 0 ? `, ${repNotes.join(' / ')}` : '';
   const baseMessage = `[T${state.turn}] 완료: ${formatQuestLogLabel(quest)} → ${statusText}, 계약 ${contractValue}G + 보너스 ${bonusGold}G − 임금 ${totalWages}G = ${netGain >= 0 ? '+' : ''}${netGain}G (Gold ${previousGold}→${state.gold})`;
 
+  const lootResult = maybeGenerateQuestLoot(quest);
+
   return {
     completionMessage: `${baseMessage}${repNoteText}`,
-    replacement: generateQuest()
+    replacement: generateQuest(),
+    lootMessage: lootResult ? lootResult.log : null
   };
 }
 
@@ -853,6 +1121,40 @@ function ensureQuestSlots() {
   while (state.quests.length < CONFIG.QUEST_SLOTS) {
     state.quests.push(createEmptyQuestSlot());
   }
+}
+
+function normalizeInventory(rawInventory) {
+  const normalized = createEmptyInventory();
+  if (!rawInventory || typeof rawInventory !== 'object') {
+    return normalized;
+  }
+  if (Array.isArray(rawInventory.equip)) {
+    normalized.equip = rawInventory.equip.slice();
+  }
+  if (Array.isArray(rawInventory.currency)) {
+    normalized.currency = rawInventory.currency
+      .map(normalizeCurrencyItem)
+      .filter(Boolean);
+  }
+  if (Array.isArray(rawInventory.consumable)) {
+    normalized.consumable = rawInventory.consumable.slice();
+  }
+  return normalized;
+}
+
+function normalizeCurrencyItem(item) {
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+  const value = Math.max(0, Number(item.value) || 0);
+  const quantity = Math.max(1, Number(item.quantity) || 1);
+  return {
+    id: typeof item.id === 'string' ? item.id : `cur_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    name: typeof item.name === 'string' ? item.name : '재화',
+    description: typeof item.description === 'string' ? item.description : '',
+    value,
+    quantity
+  };
 }
 
 /** Normalize a mercenary object loaded from storage. */
@@ -1190,9 +1492,13 @@ function openQuestAssignModal(questId) {
 
   if (elements.modalReqSummary) {
     elements.modalReqSummary.classList.remove('hidden');
+    elements.modalReqSummary.innerHTML = '';
   }
   if (elements.modalReqSum) {
-    elements.modalReqSum.textContent = '선택 합계: ';
+    elements.modalReqSum.textContent = '선택 합계 → ';
+  }
+  if (elements.modalReqSummary && elements.modalReqSum) {
+    elements.modalReqSummary.appendChild(elements.modalReqSum);
   }
 
   const summary = document.createElement('p');
@@ -1216,17 +1522,16 @@ function openQuestAssignModal(questId) {
   });
   elements.modalBody.appendChild(requirementInfo);
 
+  if (elements.modalReqSummary) {
+    requirementInfo.insertAdjacentElement('afterend', elements.modalReqSummary);
+  }
+
   const stanceWrapper = document.createElement('div');
   stanceWrapper.className = 'stance-select';
   const stanceTitle = document.createElement('p');
   stanceTitle.className = 'stance-select__title';
   stanceTitle.textContent = '탐험 성향 선택';
   stanceWrapper.appendChild(stanceTitle);
-
-  const stanceHint = document.createElement('p');
-  stanceHint.className = 'stance-select__hint';
-  stanceHint.textContent = '성향에 따라 추가 보상과 기한 초과 위험이 달라집니다.';
-  stanceWrapper.appendChild(stanceHint);
 
   const stanceOptions = document.createElement('div');
   stanceOptions.className = 'stance-select__options';
@@ -1297,6 +1602,8 @@ function openQuestAssignModal(questId) {
     });
   }
 
+  let intel = null;
+
   const updateSpanState = (span, meets) => {
     if (!span) {
       return;
@@ -1307,6 +1614,9 @@ function openQuestAssignModal(questId) {
 
   const updateSelectionUI = () => {
     const selected = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map((input) => input.value);
+    const selectedMercObjects = selected
+      .map((id) => state.mercs.find((entry) => entry.id === id))
+      .filter(Boolean);
     currentDraft.mercs = selected;
     setTempQuestDraft(questId, currentDraft);
     const totals = computeSelectedStats(selected);
@@ -1322,43 +1632,63 @@ function openQuestAssignModal(questId) {
         meetsAll = false;
       }
     });
-    const hasSelection = selected.length > 0;
+    const hasSelection = selectedMercObjects.length > 0;
     const stanceSelected = Boolean(currentDraft.stance);
     const canStart = hasSelection && meetsAll && stanceSelected;
     confirmBtn.disabled = !canStart;
     if (!canStart) {
       confirmBtn.classList.add('btn--disabled');
-      confirmBtn.title = !hasSelection
-        ? '최소 한 명의 용병을 선택해야 합니다.'
-        : !meetsAll
-          ? '요구 능력치를 충족해야 시작할 수 있습니다.'
-          : '탐험 성향을 선택해야 합니다.';
+      confirmBtn.title = availableMercs.length === 0
+        ? '투입할 수 있는 용병이 없습니다.'
+        : !hasSelection
+          ? '최소 한 명의 용병을 선택해야 합니다.'
+          : !meetsAll
+            ? '요구 능력치를 충족해야 시작할 수 있습니다.'
+            : '탐험 성향을 선택해야 합니다.';
     } else {
       confirmBtn.classList.remove('btn--disabled');
       confirmBtn.title = '';
     }
+
+    let percentMap = probabilitiesToPercentages(quest.contractProb);
+    if (selectedMercObjects.length > 0) {
+      const preview = calculateContractProbabilities(quest, quest.reward, selectedMercObjects);
+      percentMap = probabilitiesToPercentages(preview.probabilities);
+      if (intel && intel.debugLine && DEBUG_MODE && guildLevel >= 3) {
+        const debugSummary = formatProbabilityEntries(preview.probabilities).join(' / ');
+        intel.debugLine.textContent = debugSummary || '낙찰 확률 데이터 없음';
+      }
+    } else if (intel && intel.debugLine && DEBUG_MODE && guildLevel >= 3) {
+      intel.debugLine.textContent = '낙찰 확률 데이터 없음';
+    }
+    if (intel && intel.infoLine) {
+      intel.infoLine.textContent = renderRivalInfoInModal(quest, percentMap);
+    }
   };
 
-  state.mercs.forEach((merc) => {
+  const availableMercs = state.mercs.filter((merc) => !merc.busy);
+
+  if (availableMercs.length === 0) {
+    const emptyItem = document.createElement('div');
+    emptyItem.className = 'assign-item assign-item--disabled';
+    emptyItem.textContent = '투입 가능한 용병이 없습니다. 임무 완료를 기다리세요.';
+    list.appendChild(emptyItem);
+  }
+
+  availableMercs.forEach((merc) => {
     const item = document.createElement('div');
     item.className = 'assign-item';
-    if (merc.busy) {
-      item.classList.add('assign-item--disabled');
-    }
 
     const label = document.createElement('label');
     label.setAttribute('for', `assign-${merc.id}`);
-    const detailText = merc.busy
-      ? `🔒 임무 중`
-      : `임금 ${merc.wage_per_quest}G · ATK ${merc.atk} · DEF ${merc.def} · STAM ${merc.stamina}`;
+    const detailText = `임금 ${merc.wage_per_quest}G · ATK ${merc.atk} · DEF ${merc.def} · STAM ${merc.stamina}`;
     label.innerHTML = `<strong>${merc.name} [${merc.grade}]</strong><span>${detailText}</span>`;
 
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.id = `assign-${merc.id}`;
     checkbox.value = merc.id;
-    checkbox.disabled = merc.busy;
-    if (!checkbox.disabled && initialSelection.includes(merc.id)) {
+    if (initialSelection.includes(merc.id)) {
       checkbox.checked = true;
     }
 
@@ -1372,9 +1702,6 @@ function openQuestAssignModal(questId) {
       if (target instanceof HTMLElement && target.closest('label') === label) {
         return;
       }
-      if (checkbox.disabled) {
-        return;
-      }
       checkbox.checked = !checkbox.checked;
       updateSelectionUI();
     });
@@ -1384,6 +1711,11 @@ function openQuestAssignModal(questId) {
   });
 
   elements.modalBody.appendChild(list);
+
+  intel = createModalIntelBlock(quest, probabilitiesToPercentages(quest.contractProb));
+  if (intel && intel.container) {
+    elements.modalBody.appendChild(intel.container);
+  }
 
   const actions = document.createElement('div');
   actions.className = 'modal__actions';
@@ -1499,10 +1831,10 @@ function openBidModal(quest, assignedMercs, stance) {
   stanceLine.textContent = `선택한 성향: ${stanceLabel}`;
   elements.modalBody.appendChild(stanceLine);
 
-  const rivalLine = document.createElement('p');
-  rivalLine.className = 'modal-subtle';
-  rivalLine.textContent = `AI 입찰가 → ${formatRivalBidSummary(quest)}`;
-  elements.modalBody.appendChild(rivalLine);
+  const intel = createModalIntelBlock(quest, probabilitiesToPercentages(quest.contractProb));
+  if (intel && intel.container) {
+    elements.modalBody.appendChild(intel.container);
+  }
 
   const inputWrapper = document.createElement('div');
   inputWrapper.className = 'bid-input';
@@ -1535,6 +1867,17 @@ function openBidModal(quest, assignedMercs, stance) {
     probabilityPreview.textContent = summary
       ? `예상 낙찰 확률: ${summary}`
       : '예상 낙찰 확률: 데이터 부족';
+    if (intel && intel.infoLine) {
+      intel.infoLine.textContent = renderRivalInfoInModal(quest, probabilitiesToPercentages(probabilities));
+    }
+    if (intel && intel.bidLine && guildLevel >= 3) {
+      intel.bidLine.textContent = formatRivalBidSummary(quest)
+        ? `AI 입찰가: ${formatRivalBidSummary(quest)}`
+        : 'AI 입찰 데이터 없음';
+    }
+    if (intel && intel.debugLine && DEBUG_MODE && guildLevel >= 3) {
+      intel.debugLine.textContent = summary || '낙찰 확률 데이터 없음';
+    }
   };
 
   updateProbabilityPreview();
@@ -1615,8 +1958,9 @@ function calculateContractProbabilities(quest, playerBid, assignedMercs) {
   });
 
   const bids = participants.map((participant) => participant.value);
-  const minBid = Math.min(...bids);
-  const maxBid = Math.max(...bids);
+  const minBid = bids.length > 0 ? Math.min(...bids) : 0;
+  const maxBid = bids.length > 0 ? Math.max(...bids) : 0;
+  const rewardBase = Math.max(1, Number(quest.reward) || 1);
   const weights = CONFIG.WEIGHTS_BY_IMPORTANCE[quest.importance] || CONFIG.WEIGHTS_BY_IMPORTANCE.gold;
 
   const rivalParticipants = participants.filter((participant) => participant.type === 'rival');
@@ -1628,7 +1972,7 @@ function calculateContractProbabilities(quest, playerBid, assignedMercs) {
   const playerRepTerm = computePlayerRepTerm(avgRivalRep);
 
   participants.forEach((participant) => {
-    const bidTerm = computeBidAdvantage(participant.value, minBid, maxBid);
+    const bidTerm = computeBidAdvantage(participant.value, minBid, maxBid, rewardBase);
     const statsScore = participant.type === 'player' ? statsTerm : 0;
     const repTerm = participant.type === 'player'
       ? playerRepTerm
@@ -1671,14 +2015,15 @@ function sampleFromProbabilities(participants, probabilities) {
   return participants[participants.length - 1].key;
 }
 
-function computeBidAdvantage(value, min, max) {
-  if (!Number.isFinite(value)) {
+function computeBidAdvantage(value, min, max, reward) {
+  if (!Number.isFinite(value) || !Number.isFinite(reward) || reward <= 0) {
     return 0;
   }
-  if (max === min) {
-    return 0.5;
-  }
-  return clamp((max - value) / (max - min), 0, 1);
+  const range = Math.max(1, max - min);
+  const baseAdvantage = max === min ? 0.5 : clamp((max - value) / range, 0, 1);
+  const overbid = Math.max(0.01, value / reward);
+  const penalty = clamp(1 / Math.pow(overbid, 1.5), 0, 1);
+  return clamp(baseAdvantage * penalty, 0, 1);
 }
 
 function computePlayerStatsTerm(assignedMercs, quest) {
@@ -1828,9 +2173,11 @@ function render() {
   elements.recruitBtn.title = recruitLocked ? '이번 턴에는 이미 용병을 모집했습니다.' : '';
   renderMercs();
   renderQuests();
+  renderInventory();
   renderLogs();
   renderAssetChecklist();
   renderBoardFormulaState();
+  updatePanelDimming();
 }
 
 /** Render the mercenary list. */
@@ -2033,14 +2380,6 @@ function renderQuests() {
     requirements.className = 'quest-card__requirements';
     requirements.textContent = `요구 ATK ${quest.req.atk} / DEF ${quest.req.def} / STAM ${quest.req.stam}`;
 
-    const rivalSummary = formatRivalBidSummary(quest);
-    let rivalBids = null;
-    if (rivalSummary) {
-      rivalBids = document.createElement('div');
-      rivalBids.className = 'quest-card__rival-bids';
-      rivalBids.textContent = rivalSummary;
-    }
-
     const assigned = document.createElement('div');
     assigned.className = 'quest-card__assigned';
     if (isInProgress) {
@@ -2157,17 +2496,7 @@ function renderQuests() {
     }
     actions.appendChild(runBtn);
 
-    if (DEBUG_MODE) {
-      const probElement = createProbabilityDebugLine(quest);
-      if (probElement) {
-        actions.appendChild(probElement);
-      }
-    }
-
     card.append(header, stats, requirements);
-    if (rivalBids) {
-      card.appendChild(rivalBids);
-    }
     if (assigned.textContent) {
       card.appendChild(assigned);
     }
@@ -2247,18 +2576,73 @@ function formatProbabilityEntries(probabilities) {
   return entries;
 }
 
-function createProbabilityDebugLine(quest) {
-  if (!quest) {
-    return null;
+function probabilitiesToPercentages(probabilities) {
+  const result = {};
+  if (!probabilities || typeof probabilities !== 'object') {
+    return result;
   }
-  const entries = formatProbabilityEntries(quest.contractProb);
-  if (entries.length === 0) {
-    return null;
+  Object.entries(probabilities).forEach(([key, value]) => {
+    if (Number.isFinite(value)) {
+      result[key] = Math.round(value * 100);
+    }
+  });
+  return result;
+}
+
+function renderRivalInfoInModal(quest, percentMap) {
+  if (guildLevel === 1) {
+    return '???';
   }
+  if (guildLevel === 2) {
+    return '상대 입찰 동향: 중간대 추정';
+  }
+  const entries = [];
+  if (percentMap && Number.isFinite(percentMap.player)) {
+    entries.push(`Player ${percentMap.player}%`);
+  }
+  const rivals = Array.isArray(state.rivals) && state.rivals.length > 0 ? state.rivals : DEFAULT_RIVALS;
+  rivals.forEach((rival) => {
+    const key = rival.id;
+    const percent = percentMap ? percentMap[key] : undefined;
+    if (Number.isFinite(percent)) {
+      entries.push(`${formatRivalDisplayName(rival.name)} ${percent}%`);
+    }
+  });
+  return entries.length > 0 ? entries.join(' · ') : '데이터 부족';
+}
+
+function createModalIntelBlock(quest, percentMap) {
   const container = document.createElement('div');
-  container.className = 'quest-card__prob-debug';
-  container.textContent = entries.join(' / ');
-  return container;
+  container.className = 'modal__intel';
+
+  const title = document.createElement('h4');
+  title.textContent = '라이벌 정보';
+  container.appendChild(title);
+
+  const infoLine = document.createElement('p');
+  infoLine.className = 'modal__intel-note';
+  infoLine.textContent = renderRivalInfoInModal(quest, percentMap);
+  container.appendChild(infoLine);
+
+  let bidLine = null;
+  if (guildLevel >= 3) {
+    bidLine = document.createElement('p');
+    bidLine.className = 'modal__intel-note';
+    const rivalSummary = formatRivalBidSummary(quest);
+    bidLine.textContent = rivalSummary ? `AI 입찰가: ${rivalSummary}` : 'AI 입찰 데이터 없음';
+    container.appendChild(bidLine);
+  }
+
+  let debugLine = null;
+  if (DEBUG_MODE && guildLevel >= 3) {
+    debugLine = document.createElement('p');
+    debugLine.className = 'modal__intel-note';
+    const debugEntries = formatProbabilityEntries(quest.contractProb);
+    debugLine.textContent = debugEntries.length > 0 ? debugEntries.join(' / ') : '낙찰 확률 데이터 없음';
+    container.appendChild(debugLine);
+  }
+
+  return { container, infoLine, bidLine, debugLine };
 }
 
 function getRivalById(id) {
