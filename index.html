@@ -10,9 +10,13 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div class="bg-scrim"></div>
   <div id="app">
-    <header class="top-bar">
-      <div class="top-bar__title">Revival Guild</div>
+    <header class="top-bar panel">
+      <div class="top-bar__group">
+        <div class="top-bar__title">Revival Guild</div>
+        <div class="top-bar__calendar" id="calendar-display">길드력 21년 04월</div>
+      </div>
       <div class="top-bar__resources">
         <span class="resource-label">💰 Gold</span>
         <span id="gold-value">0</span>
@@ -20,50 +24,77 @@
         <span class="resource-label">⭐ Reputation</span>
         <span id="reputation-value">0</span>
       </div>
-      <div class="top-bar__calendar" id="calendar-display">길드력 21년 04월</div>
       <div class="top-bar__spawn-rate">현재 퀘스트 발생률: <span id="quest-spawn-rate">0%</span></div>
       <div class="top-bar__actions">
+        <button id="background-toggle" class="btn btn--ghost">배경 강조</button>
         <button id="recruit-btn" class="btn btn--primary">용병 모집</button>
         <button id="new-turn-btn" class="btn btn--accent">턴 진행</button>
       </div>
     </header>
 
-    <section class="panel asset-panel">
-      <div class="panel__header">
-        <h2>📦 Missing Assets</h2>
+    <div id="shell">
+      <div class="shell__primary">
+        <section class="panel main-panel" id="main-panel">
+          <div class="panel__header panel__header--tabs">
+            <h2>길드 관리</h2>
+            <div class="tab-group" id="main-tabs">
+              <button class="tab" data-main-tab="mercs">용병</button>
+              <button class="tab is-active" data-main-tab="quests">퀘스트</button>
+              <button class="tab" data-main-tab="inventory">창고</button>
+            </div>
+          </div>
+          <div class="tab-panels">
+            <div class="tab-panel" data-tab-panel="mercs">
+              <div class="tab-panel__header">
+                <h3>고용된 용병</h3>
+              </div>
+              <div id="merc-list" class="merc-list empty-state">아직 고용된 용병이 없습니다.</div>
+            </div>
+            <div class="tab-panel is-active" data-tab-panel="quests">
+              <div class="tab-panel__header">
+                <h3>던전 퀘스트</h3>
+              </div>
+              <div id="quest-list" class="quest-list">
+                <div class="empty-state">턴을 진행해 퀘스트를 생성하세요.</div>
+              </div>
+            </div>
+            <div class="tab-panel" data-tab-panel="inventory">
+              <div class="tab-panel__header">
+                <h3>길드 창고</h3>
+              </div>
+              <div class="inventory-tabs" id="inventory-tabs">
+                <button class="subtab is-active" data-inventory-tab="equip">장비</button>
+                <button class="subtab" data-inventory-tab="currency">재화</button>
+                <button class="subtab" data-inventory-tab="consumable">퀘소</button>
+              </div>
+              <div class="inventory-panels">
+                <ul class="inventory-list" id="inventory-equip" data-inventory-panel="equip"></ul>
+                <ul class="inventory-list is-active" id="inventory-currency" data-inventory-panel="currency"></ul>
+                <ul class="inventory-list" id="inventory-consumable" data-inventory-panel="consumable"></ul>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
-      <div id="asset-note" class="asset-panel__note"></div>
-      <ul id="missing-assets-list" class="asset-list">
-        <li class="asset-list__item asset-list__item--loading">에셋 확인 중...</li>
-      </ul>
-    </section>
+      <div class="shell__secondary">
+        <section class="panel asset-panel">
+          <div class="panel__header">
+            <h2>📦 Missing Assets</h2>
+          </div>
+          <div id="asset-note" class="asset-panel__note"></div>
+          <ul id="missing-assets-list" class="asset-list">
+            <li class="asset-list__item asset-list__item--loading">에셋 확인 중...</li>
+          </ul>
+        </section>
 
-    <main class="main-content">
-      <section class="panel merc-panel">
-        <div class="panel__header">
-          <h2>고용된 용병</h2>
-        </div>
-        <div id="merc-list" class="merc-list empty-state">
-          아직 고용된 용병이 없습니다.
-        </div>
-      </section>
-
-      <section class="panel quest-panel">
-        <div class="panel__header">
-          <h2>던전 퀘스트</h2>
-        </div>
-        <div id="quest-list" class="quest-list">
-          <div class="empty-state">턴을 진행해 퀘스트를 생성하세요.</div>
-        </div>
-      </section>
-    </main>
-
-    <section class="log-panel panel">
-      <div class="panel__header">
-        <h2>길드 기록</h2>
+        <section class="panel log-panel">
+          <div class="panel__header">
+            <h2>길드 기록</h2>
+          </div>
+          <ul id="log-list" class="log-list"></ul>
+        </section>
       </div>
-      <ul id="log-list" class="log-list"></ul>
-    </section>
+    </div>
   </div>
 
   <div id="modal-overlay" class="modal-overlay hidden">
