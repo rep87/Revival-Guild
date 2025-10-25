@@ -57,6 +57,11 @@ const CONFIG = {
   REP_MAX: 100
 };
 
+const FIRST_NAMES = ['Egon', 'Lira', 'Bran', 'Kara', 'Sven', 'Toma', 'Nia', 'Roth', 'Elda', 'Finn', 'Mara', 'Ivo', 'Cael', 'Rina', 'Dane'];
+const CLAN_NAMES = ['Stone', 'Ash', 'Rook', 'Vale', 'Gale', 'Holt', 'Ember', 'Reed', 'Crow', 'Voss', 'Thorn', 'Hale'];
+const RARE_SUFFIXES = ['′', '•', 'Ⅱ', 'Ⅲ', 'Ⅳ', 'Ⅴ', 'Ⅵ', 'Ⅶ', 'Ⅷ', 'Ⅸ', 'Ⅹ', ' of Vale'];
+const SUPERSCRIPT_DIGITS = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹' };
+
 const STORAGE_KEY = 'rg_v1_save';
 
 const QUEST_TIER_DISTRIBUTION = [
@@ -88,6 +93,9 @@ const DEFAULT_RIVALS = [
 
 const guildLevel = 1;
 
+let usedNameRegistry = new Set();
+let mercDisplayNameCache = new Map();
+
 const CURRENCY_LOOT_TABLE = [
   { name: '고대 주화 꾸러미', description: '폐허에서 회수한 금빛 주화.', min: 25, max: 70 },
   { name: '연합 교역권', description: '길드 연합 상인에게 통용되는 수표.', min: 40, max: 90 },
@@ -97,7 +105,9 @@ const CURRENCY_LOOT_TABLE = [
 const uiState = {
   activeMainTab: 'quests',
   activeInventoryTab: 'currency',
-  backgroundDimmed: false
+  backgroundDimmed: false,
+  probabilityPreview: DEBUG_MODE,
+  showDebugConfig: false
 };
 
 /** @type {{start_gold: number, merc_names: string[]}} */
@@ -113,7 +123,8 @@ let state = {
   lastRecruitTurn: null,
   reputation: 25,
   rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival })),
-  inventory: createEmptyInventory()
+  inventory: createEmptyInventory(),
+  meta: { usedNames: [] }
 };
 
 let currentRecruitCandidates = [];
@@ -125,6 +136,95 @@ const tempSelections = {};
 
 function createEmptyInventory() {
   return { equip: [], currency: [], consumable: [] };
+}
+
+function ensureMeta() {
+  if (!state.meta || typeof state.meta !== 'object') {
+    state.meta = { usedNames: [] };
+  }
+}
+
+function syncUsedNamesToState() {
+  ensureMeta();
+  state.meta.usedNames = Array.from(usedNameRegistry);
+}
+
+function initializeUsedNames() {
+  ensureMeta();
+  const saved = Array.isArray(state.meta.usedNames) ? state.meta.usedNames : [];
+  usedNameRegistry = new Set(saved);
+  (Array.isArray(state.mercs) ? state.mercs : []).forEach((merc) => {
+    if (merc && typeof merc.name === 'string') {
+      usedNameRegistry.add(merc.name);
+    }
+  });
+  syncUsedNamesToState();
+  updateMercDisplayNameCache();
+}
+
+function recordUsedName(name) {
+  if (typeof name !== 'string' || name.trim().length === 0) {
+    return;
+  }
+  usedNameRegistry.add(name);
+  syncUsedNamesToState();
+}
+
+function toSuperscript(number) {
+  return String(number)
+    .split('')
+    .map((char) => SUPERSCRIPT_DIGITS[char] || char)
+    .join('');
+}
+
+function decorateDuplicateName(baseName, duplicateIndex) {
+  if (duplicateIndex < RARE_SUFFIXES.length) {
+    return `${baseName}${RARE_SUFFIXES[duplicateIndex]}`;
+  }
+  return `${baseName}${toSuperscript(duplicateIndex + 2)}`;
+}
+
+function generateUniqueMercName() {
+  ensureMeta();
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const base = `${randomChoice(FIRST_NAMES) || 'Nameless'} ${randomChoice(CLAN_NAMES) || 'Wanderer'}`;
+    if (!usedNameRegistry.has(base)) {
+      recordUsedName(base);
+      return base;
+    }
+    for (let suffixIndex = 0; suffixIndex < RARE_SUFFIXES.length + 8; suffixIndex += 1) {
+      const decorated = decorateDuplicateName(base, suffixIndex);
+      if (!usedNameRegistry.has(decorated)) {
+        recordUsedName(decorated);
+        return decorated;
+      }
+    }
+  }
+  const fallback = `Nameless ${toSuperscript(usedNameRegistry.size + 1)}`;
+  recordUsedName(fallback);
+  return fallback;
+}
+
+function updateMercDisplayNameCache() {
+  mercDisplayNameCache = new Map();
+  const occurrences = new Map();
+  (Array.isArray(state.mercs) ? state.mercs : []).forEach((merc) => {
+    if (!merc) {
+      return;
+    }
+    const name = typeof merc.name === 'string' ? merc.name : '용병';
+    const count = (occurrences.get(name) || 0) + 1;
+    occurrences.set(name, count);
+    const displayName = count === 1 ? name : decorateDuplicateName(name, count - 2);
+    mercDisplayNameCache.set(merc.id, displayName);
+  });
+}
+
+function getMercDisplayName(merc) {
+  if (!merc) {
+    return '용병';
+  }
+  return mercDisplayNameCache.get(merc.id) || merc.name || '용병';
 }
 
 const EXPLORATION_SCENARIOS = {
@@ -166,7 +266,14 @@ const elements = {
   inventoryPanels: document.querySelectorAll('[data-inventory-panel]'),
   inventoryEquipList: document.getElementById('inventory-equip'),
   inventoryCurrencyList: document.getElementById('inventory-currency'),
-  inventoryConsumableList: document.getElementById('inventory-consumable')
+  inventoryConsumableList: document.getElementById('inventory-consumable'),
+  questDashboard: document.getElementById('quest-dashboard'),
+  probabilityToggle: document.getElementById('probability-preview-toggle'),
+  debugConfig: document.getElementById('debug-config'),
+  configDump: document.getElementById('config-dump'),
+  debugConfigToggle: document.getElementById('debug-config-toggle'),
+  debugSaveBtn: document.getElementById('debug-save-btn'),
+  debugLoadBtn: document.getElementById('debug-load-btn')
 };
 
 /**
@@ -211,6 +318,18 @@ function bindEvents() {
   }
   if (elements.backgroundToggle) {
     elements.backgroundToggle.addEventListener('click', toggleBackgroundEmphasis);
+  }
+  if (elements.probabilityToggle) {
+    elements.probabilityToggle.addEventListener('click', toggleProbabilityPreview);
+  }
+  if (elements.debugConfigToggle) {
+    elements.debugConfigToggle.addEventListener('click', toggleDebugConfig);
+  }
+  if (elements.debugSaveBtn) {
+    elements.debugSaveBtn.addEventListener('click', handleManualSave);
+  }
+  if (elements.debugLoadBtn) {
+    elements.debugLoadBtn.addEventListener('click', handleManualLoad);
   }
   bindTabNavigation();
   elements.modalOverlay.addEventListener('click', (event) => {
@@ -334,6 +453,32 @@ function toggleBackgroundEmphasis() {
   updatePanelDimming();
 }
 
+function toggleProbabilityPreview() {
+  uiState.probabilityPreview = !uiState.probabilityPreview;
+  renderDebugPanel();
+  render();
+}
+
+function toggleDebugConfig() {
+  uiState.showDebugConfig = !uiState.showDebugConfig;
+  renderDebugPanel();
+}
+
+function handleManualSave() {
+  syncUsedNamesToState();
+  save();
+  log(`[T${state.turn}] 디버그: 수동 저장을 실행했습니다.`);
+  renderDebugPanel();
+}
+
+async function handleManualLoad() {
+  load();
+  render();
+  await refreshAssetChecklist();
+  log(`[T${state.turn}] 디버그: 저장 데이터를 불러왔습니다.`);
+  renderDebugPanel();
+}
+
 function updatePanelDimming() {
   const panels = Array.from(document.querySelectorAll('.panel'));
   panels.forEach((panel) => {
@@ -342,6 +487,27 @@ function updatePanelDimming() {
   if (elements.backgroundToggle) {
     elements.backgroundToggle.textContent = uiState.backgroundDimmed ? '배경 강조 해제' : '배경 강조';
   }
+}
+
+function renderDebugPanel() {
+  if (elements.probabilityToggle) {
+    const active = uiState.probabilityPreview;
+    elements.probabilityToggle.textContent = active ? '확률 프리뷰 끄기' : '확률 프리뷰 켜기';
+  }
+  if (elements.debugConfigToggle) {
+    elements.debugConfigToggle.textContent = uiState.showDebugConfig ? 'CONFIG 숨기기' : 'CONFIG 보기';
+  }
+  if (elements.debugConfig) {
+    const show = uiState.showDebugConfig;
+    elements.debugConfig.classList.toggle('hidden', !show);
+    if (show && elements.configDump) {
+      elements.configDump.textContent = JSON.stringify(CONFIG, null, 2);
+    }
+  }
+}
+
+function shouldShowProbabilityPreview() {
+  return uiState.probabilityPreview || DEBUG_MODE;
 }
 
 function renderInventory() {
@@ -534,7 +700,12 @@ function load() {
         lastRecruitTurn: typeof parsed.lastRecruitTurn === 'number' ? parsed.lastRecruitTurn : null,
         reputation: clampRep(Number(parsed.reputation), 25),
         rivals: normalizedRivals,
-        inventory: normalizeInventory(parsed.inventory)
+        inventory: normalizeInventory(parsed.inventory),
+        meta: {
+          usedNames: Array.isArray(parsed.meta?.usedNames)
+            ? parsed.meta.usedNames.filter((name) => typeof name === 'string')
+            : []
+        }
       };
       loadedFromStorage = true;
     } catch (error) {
@@ -552,10 +723,12 @@ function load() {
       lastRecruitTurn: null,
       reputation: 25,
       rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival })),
-      inventory: createEmptyInventory()
+      inventory: createEmptyInventory(),
+      meta: { usedNames: [] }
     };
   }
 
+  initializeUsedNames();
   ensureQuestSlots();
   if (!loadedFromStorage) {
     spawnQuestsForEmptySlots(true);
@@ -568,6 +741,7 @@ function load() {
  * Persist the current state to localStorage.
  */
 function save() {
+  syncUsedNamesToState();
   const toSave = {
     gold: state.gold,
     turn: state.turn,
@@ -577,7 +751,8 @@ function save() {
     lastRecruitTurn: state.lastRecruitTurn,
     reputation: state.reputation,
     rivals: state.rivals,
-    inventory: state.inventory
+    inventory: state.inventory,
+    meta: state.meta
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
 }
@@ -1162,8 +1337,21 @@ function normalizeMerc(merc) {
   if (!merc || typeof merc !== 'object') {
     return null;
   }
+  const grade = typeof merc.grade === 'string' ? merc.grade : 'C';
+  const hasName = typeof merc.name === 'string' && merc.name.trim().length > 0;
+  const name = hasName ? merc.name : generateUniqueMercName();
+  const level = Number.isFinite(merc.level)
+    ? Math.max(1, Math.round(merc.level))
+    : defaultLevelForGrade(grade);
+  const age = Number.isFinite(merc.age)
+    ? Math.max(18, Math.round(merc.age))
+    : clamp(randomInt(20, 38), 18, 48);
   return {
     ...merc,
+    name,
+    grade,
+    level,
+    age,
     busy: Boolean(merc.busy)
   };
 }
@@ -1654,11 +1842,11 @@ function openQuestAssignModal(questId) {
     if (selectedMercObjects.length > 0) {
       const preview = calculateContractProbabilities(quest, quest.reward, selectedMercObjects);
       percentMap = probabilitiesToPercentages(preview.probabilities);
-      if (intel && intel.debugLine && DEBUG_MODE && guildLevel >= 3) {
+      if (intel && intel.debugLine && shouldShowProbabilityPreview()) {
         const debugSummary = formatProbabilityEntries(preview.probabilities).join(' / ');
         intel.debugLine.textContent = debugSummary || '낙찰 확률 데이터 없음';
       }
-    } else if (intel && intel.debugLine && DEBUG_MODE && guildLevel >= 3) {
+    } else if (intel && intel.debugLine && shouldShowProbabilityPreview()) {
       intel.debugLine.textContent = '낙찰 확률 데이터 없음';
     }
     if (intel && intel.infoLine) {
@@ -1682,7 +1870,7 @@ function openQuestAssignModal(questId) {
     const label = document.createElement('label');
     label.setAttribute('for', `assign-${merc.id}`);
     const detailText = `임금 ${merc.wage_per_quest}G · ATK ${merc.atk} · DEF ${merc.def} · STAM ${merc.stamina}`;
-    label.innerHTML = `<strong>${merc.name} [${merc.grade}]</strong><span>${detailText}</span>`;
+    label.innerHTML = `<strong>${getMercDisplayName(merc)} [${merc.grade}]</strong><span>${detailText}</span>`;
 
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
@@ -1875,7 +2063,7 @@ function openBidModal(quest, assignedMercs, stance) {
         ? `AI 입찰가: ${formatRivalBidSummary(quest)}`
         : 'AI 입찰 데이터 없음';
     }
-    if (intel && intel.debugLine && DEBUG_MODE && guildLevel >= 3) {
+    if (intel && intel.debugLine && shouldShowProbabilityPreview()) {
       intel.debugLine.textContent = summary || '낙찰 확률 데이터 없음';
     }
   };
@@ -2162,6 +2350,7 @@ function log(message) {
  * Render all UI components from the current state.
  */
 function render() {
+  updateMercDisplayNameCache();
   elements.goldValue.textContent = `${state.gold}G`;
   if (elements.reputationValue) {
     elements.reputationValue.textContent = `${state.reputation}`;
@@ -2172,9 +2361,11 @@ function render() {
   elements.recruitBtn.disabled = recruitLocked;
   elements.recruitBtn.title = recruitLocked ? '이번 턴에는 이미 용병을 모집했습니다.' : '';
   renderMercs();
+  renderQuestDashboard();
   renderQuests();
   renderInventory();
   renderLogs();
+  renderDebugPanel();
   renderAssetChecklist();
   renderBoardFormulaState();
   updatePanelDimming();
@@ -2182,6 +2373,9 @@ function render() {
 
 /** Render the mercenary list. */
 function renderMercs() {
+  if (!elements.mercList) {
+    return;
+  }
   elements.mercList.innerHTML = '';
   if (state.mercs.length === 0) {
     elements.mercList.classList.add('empty-state');
@@ -2193,43 +2387,386 @@ function renderMercs() {
   state.mercs.forEach((merc) => {
     const card = document.createElement('div');
     card.className = 'merc-card';
+    card.dataset.mercId = merc.id;
     if (merc.busy) {
       card.classList.add('merc-card--busy');
     }
 
-    const body = document.createElement('div');
-    body.className = 'merc-card__body';
-
-    const portrait = createPortraitElement(merc);
-
-    const info = document.createElement('div');
-    info.className = 'merc-card__info';
-
     const header = document.createElement('div');
-    header.className = 'merc-card__header';
-    const name = document.createElement('strong');
-    name.textContent = `${merc.name} [${merc.grade}]`;
+    header.className = 'merc-card__top';
+
+    const identity = document.createElement('div');
+    identity.className = 'merc-card__identity';
+    const name = document.createElement('span');
+    name.className = 'merc-card__name';
+    name.textContent = getMercDisplayName(merc);
+    const grade = document.createElement('span');
+    grade.className = 'merc-card__grade';
+    grade.textContent = merc.grade;
+    identity.append(name, grade);
+
     const wage = document.createElement('span');
+    wage.className = 'merc-card__wage';
     wage.textContent = `임금 ${merc.wage_per_quest}G`;
-    header.append(name, wage);
 
-    const stats = document.createElement('div');
-    stats.className = 'merc-card__stats';
-    stats.innerHTML = `ATK ${merc.atk} · DEF ${merc.def} · STAM ${merc.stamina} · 계약금 ${merc.signing_bonus}G`;
+    header.append(identity, wage);
+    card.appendChild(header);
 
-    info.append(header);
+    const slots = document.createElement('div');
+    slots.className = 'merc-card__slots';
+    slots.append(createSlotGroup('스킬'), createSlotGroup('장비'));
+    card.appendChild(slots);
+
+    const footer = document.createElement('div');
+    footer.className = 'merc-card__footer';
+    footer.textContent = '상세 보기';
+    card.appendChild(footer);
 
     if (merc.busy) {
-      const status = document.createElement('div');
-      status.className = 'merc-card__status';
-      status.textContent = '🔒 임무 중';
-      info.appendChild(status);
+      const badge = document.createElement('span');
+      badge.className = 'merc-card__badge';
+      badge.textContent = '🔒 임무 중';
+      card.appendChild(badge);
     }
 
-    info.appendChild(stats);
-    body.append(portrait, info);
-    card.append(body);
+    card.addEventListener('click', () => openMercDetails(merc.id));
     elements.mercList.appendChild(card);
+  });
+}
+
+function createSlotGroup(labelText) {
+  const group = document.createElement('div');
+  group.className = 'merc-card__slot-group';
+  const label = document.createElement('span');
+  label.className = 'merc-card__slot-label';
+  label.textContent = labelText;
+  const grid = document.createElement('div');
+  grid.className = 'merc-card__slot-grid';
+  for (let index = 0; index < 2; index += 1) {
+    const slot = document.createElement('div');
+    slot.className = 'merc-card__slot';
+    slot.title = `${labelText} 슬롯`;
+    grid.appendChild(slot);
+  }
+  group.append(label, grid);
+  return group;
+}
+
+function openMercDetails(mercId) {
+  const merc = state.mercs.find((entry) => entry.id === mercId);
+  if (!merc) {
+    log('선택한 용병을 찾을 수 없습니다.');
+    return;
+  }
+  resetModalRequirementSummary();
+  const displayName = getMercDisplayName(merc);
+  elements.modalTitle.textContent = displayName;
+  elements.modalBody.innerHTML = '';
+
+  const container = document.createElement('div');
+  container.className = 'merc-detail';
+
+  const leftColumn = document.createElement('div');
+  leftColumn.className = 'merc-detail__column';
+  const rightColumn = document.createElement('div');
+  rightColumn.className = 'merc-detail__column';
+
+  const portraitSection = createDetailSection('초상');
+  const portrait = createPortraitElement(merc);
+  portraitSection.appendChild(portrait);
+  leftColumn.appendChild(portraitSection);
+
+  const statusValue = merc.busy ? '임무 중' : '대기 중';
+  const levelValue = Number.isFinite(merc.level) ? Math.max(1, Number(merc.level)) : defaultLevelForGrade(merc.grade);
+  const ageValue = Number.isFinite(merc.age) ? `${merc.age}세` : '미상';
+  const basicSection = createDetailSection('기본 정보', [
+    { label: '등급', value: merc.grade },
+    { label: '레벨', value: `Lv.${levelValue}` },
+    { label: '나이', value: ageValue },
+    { label: '임금', value: `${merc.wage_per_quest}G` },
+    { label: '계약금', value: `${merc.signing_bonus}G` },
+    { label: '상태', value: statusValue }
+  ]);
+  leftColumn.appendChild(basicSection);
+
+  const statsSection = createDetailSection('능력치');
+  const statGrid = document.createElement('div');
+  statGrid.className = 'merc-detail__stat-grid';
+  statGrid.append(
+    createStatCard('ATK', merc.atk),
+    createStatCard('DEF', merc.def),
+    createStatCard('STAM', merc.stamina)
+  );
+  statsSection.appendChild(statGrid);
+  leftColumn.appendChild(statsSection);
+
+  const wageSection = createDetailSection('재정 정보', [
+    { label: '임금 지급', value: `${merc.wage_per_quest}G / 퀘스트` },
+    { label: '계약금 필요', value: `${merc.signing_bonus}G` }
+  ]);
+  leftColumn.appendChild(wageSection);
+
+  const skillsSection = createDetailSection('스킬');
+  const skillsPlaceholder = document.createElement('div');
+  skillsPlaceholder.className = 'merc-detail__placeholder';
+  skillsPlaceholder.textContent = '스킬 데이터가 아직 등록되지 않았습니다.';
+  skillsPlaceholder.title = '향후 업데이트로 개방됩니다.';
+  skillsSection.appendChild(skillsPlaceholder);
+  rightColumn.appendChild(skillsSection);
+
+  const equipmentSection = createDetailSection('장비');
+  const equipmentPlaceholder = document.createElement('div');
+  equipmentPlaceholder.className = 'merc-detail__placeholder';
+  equipmentPlaceholder.textContent = '장비 슬롯이 비어 있습니다.';
+  equipmentPlaceholder.title = '장비 시스템 준비 중';
+  equipmentSection.appendChild(equipmentPlaceholder);
+  rightColumn.appendChild(equipmentSection);
+
+  const chronicleSection = createDetailSection('연대기');
+  const chronicleList = document.createElement('div');
+  chronicleList.className = 'merc-detail__chronicle';
+  const chronicleEntries = buildMercChronicle(merc);
+  if (chronicleEntries.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'merc-detail__placeholder';
+    empty.textContent = '최근 활동 기록이 없습니다.';
+    chronicleSection.appendChild(empty);
+  } else {
+    chronicleEntries.forEach((entry) => {
+      const item = document.createElement('div');
+      item.className = 'merc-detail__chronicle-item';
+      const prefix = typeof entry.turn === 'number' ? `T${entry.turn} · ` : '';
+      item.textContent = `${prefix}${entry.text}`;
+      chronicleList.appendChild(item);
+    });
+    chronicleSection.appendChild(chronicleList);
+  }
+  rightColumn.appendChild(chronicleSection);
+
+  container.append(leftColumn, rightColumn);
+  elements.modalBody.appendChild(container);
+  openModal();
+}
+
+function createDetailSection(title, fields = []) {
+  const section = document.createElement('div');
+  section.className = 'merc-detail__section';
+  const heading = document.createElement('h4');
+  heading.className = 'merc-detail__title';
+  heading.textContent = title;
+  section.appendChild(heading);
+  if (fields.length > 0) {
+    const list = document.createElement('div');
+    list.className = 'merc-detail__list';
+    fields.forEach(({ label, value }) => {
+      const row = document.createElement('div');
+      row.className = 'detail-field';
+      const labelEl = document.createElement('span');
+      labelEl.className = 'detail-field__label';
+      labelEl.textContent = label;
+      const valueEl = document.createElement('span');
+      valueEl.className = 'detail-field__value';
+      valueEl.textContent = value;
+      row.append(labelEl, valueEl);
+      list.appendChild(row);
+    });
+    section.appendChild(list);
+  }
+  return section;
+}
+
+function createStatCard(label, value) {
+  const card = document.createElement('div');
+  card.className = 'merc-detail__stat';
+  const labelEl = document.createElement('span');
+  labelEl.className = 'merc-detail__stat-label';
+  labelEl.textContent = label;
+  const valueEl = document.createElement('span');
+  valueEl.textContent = `${value}`;
+  card.append(labelEl, valueEl);
+  return card;
+}
+
+function buildMercChronicle(merc) {
+  const entries = [];
+  const displayName = getMercDisplayName(merc);
+  const baseName = merc.name;
+  const logs = Array.isArray(state.log) ? state.log.slice().reverse() : [];
+  logs.forEach((entry) => {
+    if (entries.length >= 10) {
+      return;
+    }
+    const parsed = parseLogLine(entry);
+    if (!parsed.text) {
+      return;
+    }
+    if (parsed.text.includes(displayName) || parsed.text.includes(baseName)) {
+      entries.push(parsed);
+    }
+  });
+
+  (Array.isArray(state.quests) ? state.quests : []).forEach((quest) => {
+    if (!quest || quest.deleted || !Array.isArray(quest.assigned_merc_ids)) {
+      return;
+    }
+    if (!quest.assigned_merc_ids.includes(merc.id)) {
+      return;
+    }
+    const questTitle = getQuestDisplayTitle(quest);
+    const journal = Array.isArray(quest.journal) ? quest.journal.slice().reverse() : [];
+    if (journal.length === 0) {
+      entries.push({ turn: quest.started_turn || null, text: `${questTitle} · 진행 중` });
+      return;
+    }
+    journal.forEach((note, index) => {
+      if (entries.length >= 10) {
+        return;
+      }
+      const parsed = parseJournalEntry(note, quest.started_turn, index);
+      entries.push({ turn: parsed.turn, text: `${questTitle} · ${parsed.text}` });
+    });
+  });
+
+  const seen = new Set();
+  const unique = entries.filter((entry) => {
+    const key = `${entry.turn ?? 'x'}|${entry.text}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+
+  unique.sort((a, b) => {
+    const turnA = typeof a.turn === 'number' ? a.turn : -Infinity;
+    const turnB = typeof b.turn === 'number' ? b.turn : -Infinity;
+    if (turnA === turnB) {
+      return 0;
+    }
+    return turnB - turnA;
+  });
+
+  return unique.slice(0, 10);
+}
+
+function parseLogLine(entry) {
+  if (typeof entry !== 'string') {
+    return { turn: null, text: '' };
+  }
+  const [, message = entry] = entry.split(' - ');
+  const match = message.match(/\[T(\d+)\]\s*(.*)/);
+  if (match) {
+    return { turn: Number(match[1]), text: match[2] || '' };
+  }
+  return { turn: null, text: message };
+}
+
+function parseJournalEntry(note, fallbackTurn, offset) {
+  if (typeof note !== 'string') {
+    return { turn: fallbackTurn ?? null, text: '기록 없음' };
+  }
+  const match = note.match(/^\[T(\d+)\]\s*(.*)$/);
+  if (match) {
+    return { turn: Number(match[1]), text: match[2] || '' };
+  }
+  const derivedTurn = Number.isFinite(fallbackTurn) ? fallbackTurn + offset : null;
+  return { turn: derivedTurn, text: note };
+}
+
+function getQuestDisplayTitle(quest) {
+  if (!quest) {
+    return '퀘스트';
+  }
+  const tierLabel = quest.tier ? `${quest.tier}급 ` : '';
+  return `${tierLabel}던전 탐험`;
+}
+
+function defaultLevelForGrade(grade) {
+  const base = { S: 7, A: 6, B: 5, C: 4, D: 3 };
+  return base[grade] || 3;
+}
+
+function renderQuestDashboard() {
+  if (!elements.questDashboard) {
+    return;
+  }
+  elements.questDashboard.innerHTML = '';
+  const activeQuests = (Array.isArray(state.quests) ? state.quests : [])
+    .filter((quest) => quest && !quest.deleted && quest.status === 'in_progress');
+  if (activeQuests.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'quest-dashboard__empty';
+    empty.textContent = '진행 중인 퀘스트가 없습니다.';
+    elements.questDashboard.appendChild(empty);
+    return;
+  }
+
+  activeQuests.forEach((quest) => {
+    const card = document.createElement('div');
+    card.className = 'quest-dashboard__card';
+
+    const header = document.createElement('div');
+    header.className = 'quest-dashboard__header';
+    const title = document.createElement('div');
+    title.className = 'quest-dashboard__title';
+    title.textContent = getQuestDisplayTitle(quest);
+    header.appendChild(title);
+    if (quest.overdue) {
+      const badge = document.createElement('span');
+      badge.className = 'quest-dashboard__badge';
+      badge.textContent = '기한 초과';
+      header.appendChild(badge);
+    }
+    card.appendChild(header);
+
+    const meta = document.createElement('div');
+    meta.className = 'quest-dashboard__meta';
+    const remaining = Math.max(0, Number(quest.remaining_turns) || 0);
+    const stanceLabel = quest.stance === 'on_time' ? '기한 준수' : quest.stance === 'meticulous' ? '꼼꼼히 탐색' : '미지정';
+    const bonus = Math.max(0, Number(quest.bonusGold) || 0);
+    const assignedCount = Array.isArray(quest.assigned_merc_ids) ? quest.assigned_merc_ids.length : 0;
+    const deadline = Number.isFinite(quest.deadline_turn) ? quest.deadline_turn : quest.turns_cost;
+    const metaEntries = [
+      `성향: ${stanceLabel}`,
+      `남은 ${remaining}턴`,
+      `보너스 ${bonus}G`,
+      `용병 ${assignedCount}명`,
+      `마감 ${deadline}턴`
+    ];
+    metaEntries.forEach((text) => {
+      const span = document.createElement('span');
+      span.textContent = text;
+      meta.appendChild(span);
+    });
+    card.appendChild(meta);
+
+    const progress = document.createElement('div');
+    progress.className = 'quest-dashboard__progress';
+    const progressBar = document.createElement('div');
+    progressBar.className = 'quest-dashboard__progress-bar';
+    const progressFill = document.createElement('div');
+    progressFill.className = 'quest-dashboard__progress-fill';
+    const plannedTurns = Math.max(1, Number(quest.turns_cost) || 1);
+    const progressValue = Math.max(0, Number(quest.progress) || 0);
+    const progressPercent = Math.max(0, Math.min(100, (progressValue / plannedTurns) * 100));
+    progressFill.style.width = `${progressPercent}%`;
+    progressBar.appendChild(progressFill);
+
+    const progressLabel = document.createElement('div');
+    progressLabel.className = 'quest-dashboard__progress-label';
+    if (quest.overdue) {
+      const overdueTurns = Math.max(0, progressValue - plannedTurns);
+      progressLabel.textContent = overdueTurns > 0
+        ? `초과 ${overdueTurns}턴 진행`
+        : '기한 초과';
+    } else {
+      progressLabel.textContent = `진행 ${progressValue}/${plannedTurns}턴`;
+    }
+
+    progress.append(progressBar, progressLabel);
+    card.appendChild(progress);
+
+    elements.questDashboard.appendChild(card);
   });
 }
 
@@ -2386,7 +2923,7 @@ function renderQuests() {
       const assignedNames = quest.assigned_merc_ids
         .map((id) => state.mercs.find((merc) => merc.id === id))
         .filter(Boolean)
-        .map((merc) => merc.name);
+        .map((merc) => getMercDisplayName(merc));
       assigned.textContent = assignedNames.length > 0 ? `투입: ${assignedNames.join(', ')}` : '투입 용병 없음';
     } else if (!isBidFailed) {
       assigned.textContent = '대기 중: 용병 배치 필요';
@@ -2634,7 +3171,7 @@ function createModalIntelBlock(quest, percentMap) {
   }
 
   let debugLine = null;
-  if (DEBUG_MODE && guildLevel >= 3) {
+  if (shouldShowProbabilityPreview()) {
     debugLine = document.createElement('p');
     debugLine.className = 'modal__intel-note';
     const debugEntries = formatProbabilityEntries(quest.contractProb);
@@ -2758,12 +3295,15 @@ function generateMerc() {
   };
   const modifiers = gradeModifiers[grade];
 
-  const name = pickRandomName();
+  const name = generateUniqueMercName();
   const atk = clamp(randomInt(CONFIG.STAT_MIN, CONFIG.STAT_MAX) + modifiers.statBonus, CONFIG.STAT_MIN, CONFIG.STAT_MAX + 3);
   const def = clamp(randomInt(CONFIG.STAT_MIN, CONFIG.STAT_MAX) + modifiers.statBonus, CONFIG.STAT_MIN, CONFIG.STAT_MAX + 3);
   const stamina = clamp(randomInt(CONFIG.STAT_MIN, CONFIG.STAT_MAX) + modifiers.statBonus, CONFIG.STAT_MIN, CONFIG.STAT_MAX + 3);
   const signing_bonus = Math.round(clamp(randomInt(CONFIG.MERC_SIGN_MIN, CONFIG.MERC_SIGN_MAX) * modifiers.signMultiplier, CONFIG.MERC_SIGN_MIN, CONFIG.MERC_SIGN_MAX * 1.6));
   const wage_per_quest = Math.round(clamp(randomInt(CONFIG.MERC_WAGE_MIN, CONFIG.MERC_WAGE_MAX) * modifiers.wageMultiplier, CONFIG.MERC_WAGE_MIN, CONFIG.MERC_WAGE_MAX * 1.6));
+  const baseLevel = defaultLevelForGrade(grade);
+  const level = clamp(baseLevel + randomInt(-1, 2), 1, baseLevel + 4);
+  const age = clamp(randomInt(19, 36) + randomInt(0, 4), 18, 48);
 
   return {
     id: `merc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -2774,6 +3314,8 @@ function generateMerc() {
     stamina,
     signing_bonus,
     wage_per_quest,
+    level,
+    age,
     busy: false
   };
 }
@@ -2789,17 +3331,6 @@ function rollGrade() {
   if (roll < 0.50) return 'B';
   if (roll < 0.80) return 'C';
   return 'D';
-}
-
-/**
- * Pick a random name from the seed name pool.
- * @returns {string}
- */
-function pickRandomName() {
-  if (!seedData.merc_names || seedData.merc_names.length === 0) {
-    return `Merc-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
-  }
-  return seedData.merc_names[Math.floor(Math.random() * seedData.merc_names.length)];
 }
 
 /**
