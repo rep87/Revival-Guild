@@ -41,6 +41,7 @@
               <button class="tab" data-main-tab="mercs">용병</button>
               <button class="tab is-active" data-main-tab="quests">퀘스트</button>
               <button class="tab" data-main-tab="inventory">창고</button>
+              <button class="tab" data-main-tab="debug">디버그</button>
             </div>
           </div>
           <div class="tab-panels">
@@ -54,6 +55,7 @@
               <div class="tab-panel__header">
                 <h3>던전 퀘스트</h3>
               </div>
+              <div id="quest-dashboard" class="quest-dashboard"></div>
               <div id="quest-list" class="quest-list">
                 <div class="empty-state">턴을 진행해 퀘스트를 생성하세요.</div>
               </div>
@@ -73,20 +75,41 @@
                 <ul class="inventory-list" id="inventory-consumable" data-inventory-panel="consumable"></ul>
               </div>
             </div>
+            <div class="tab-panel" data-tab-panel="debug">
+              <div class="tab-panel__header">
+                <h3>디버그 도구</h3>
+              </div>
+              <div id="debug-panel" class="debug-panel">
+                <div class="debug-panel__section">
+                  <div class="debug-panel__controls">
+                    <button id="probability-preview-toggle" class="btn btn--ghost">확률 프리뷰 켜기</button>
+                    <button id="debug-config-toggle" class="btn btn--ghost">CONFIG 보기</button>
+                    <div id="debug-config" class="debug-config hidden">
+                      <pre id="config-dump"></pre>
+                    </div>
+                  </div>
+                  <div class="debug-panel__actions">
+                    <button id="debug-save-btn" class="btn btn--primary">저장</button>
+                    <button id="debug-load-btn" class="btn btn--ghost">불러오기</button>
+                  </div>
+                </div>
+                <div class="debug-panel__section">
+                  <h4 class="debug-panel__title">📦 Missing Assets</h4>
+                  <div id="asset-note" class="asset-panel__note"></div>
+                  <ul id="missing-assets-list" class="asset-list">
+                    <li class="asset-list__item asset-list__item--loading">에셋 확인 중...</li>
+                  </ul>
+                </div>
+                <div class="debug-panel__section">
+                  <h4 class="debug-panel__title">CONFIG 스냅샷</h4>
+                  <p class="debug-panel__hint">상단 버튼으로 최신 설정을 확인하세요.</p>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
       </div>
       <div class="shell__secondary">
-        <section class="panel asset-panel">
-          <div class="panel__header">
-            <h2>📦 Missing Assets</h2>
-          </div>
-          <div id="asset-note" class="asset-panel__note"></div>
-          <ul id="missing-assets-list" class="asset-list">
-            <li class="asset-list__item asset-list__item--loading">에셋 확인 중...</li>
-          </ul>
-        </section>
-
         <section class="panel log-panel">
           <div class="panel__header">
             <h2>길드 기록</h2>
