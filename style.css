@@ -550,6 +550,40 @@ body.no-bg-asset {
   color: var(--color-text-secondary);
 }
 
+.merc-card__mood {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 6px;
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+}
+
+.merc-card__mood-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(221, 186, 110, 0.1);
+  border: 1px solid rgba(221, 186, 110, 0.2);
+  font-weight: 600;
+}
+
+.merc-card__mood-badge:nth-child(1) {
+  background: rgba(208, 96, 64, 0.18);
+  border-color: rgba(208, 96, 64, 0.28);
+}
+
+.merc-card__mood-badge:nth-child(2) {
+  background: rgba(92, 168, 130, 0.18);
+  border-color: rgba(92, 168, 130, 0.28);
+}
+
+.merc-card__mood-badge:nth-child(3) {
+  background: rgba(90, 125, 201, 0.18);
+  border-color: rgba(90, 125, 201, 0.28);
+}
+
 .merc-card__slots {
   display: flex;
   align-items: flex-start;
@@ -1186,6 +1220,115 @@ body.no-bg-asset {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.quest-report {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.quest-report__heading {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.quest-report__timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.quest-report__event {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(18, 14, 10, 0.55);
+  border: 1px solid rgba(221, 186, 110, 0.18);
+}
+
+.quest-report__event--camp {
+  border-color: rgba(114, 176, 120, 0.35);
+}
+
+.quest-report__event--boss {
+  border-color: rgba(196, 123, 42, 0.4);
+}
+
+.quest-report__event--fight {
+  border-color: rgba(196, 123, 42, 0.28);
+}
+
+.quest-report__event--trap {
+  border-color: rgba(208, 96, 64, 0.35);
+}
+
+.quest-report__event--story {
+  border-style: dashed;
+}
+
+.quest-report__event--chest {
+  border-color: rgba(142, 180, 219, 0.35);
+}
+
+.quest-report__icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.quest-report__event-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quest-report__event-turn {
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.quest-report__event-text {
+  font-size: 0.95rem;
+}
+
+.quest-report__event--empty {
+  justify-content: center;
+  font-size: 0.9rem;
+  color: var(--color-text-secondary);
+}
+
+.quest-report__return {
+  background: rgba(18, 14, 10, 0.55);
+  border: 1px solid rgba(221, 186, 110, 0.2);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.quest-report__return strong {
+  font-size: 0.95rem;
+}
+
+.quest-report__return p {
+  margin: 0;
+  font-size: 0.94rem;
+  color: var(--color-text-secondary);
+}
+
+.quest-report__note {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  opacity: 0.9;
 }
 
 .merc-detail {
