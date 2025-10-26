@@ -17,18 +17,17 @@ const CONFIG = {
   STAT_MIN: 1,
   STAT_MAX: 10,
   QUEST_SLOTS: 3,
-  QUEST_SPAWN_RATE: 0.6,
   QUEST_VISIBLE_TURNS_MIN: 1,
   QUEST_VISIBLE_TURNS_MAX: 4,
   QUEST_REWARD_MIN: 50,
   QUEST_REWARD_MAX: 200,
-  QUEST_TURNS_MIN: 1,
-  QUEST_TURNS_MAX: 3,
+  QUEST_TURNS_MIN: 5,
+  QUEST_TURNS_MAX: 12,
   RECRUIT_ONCE_PER_TURN: true,
   ASSET_BG: 'assets/bg/medieval.jpg',
   ASSET_MERC: (mercId) => `assets/mercs/${mercId}.jpg`,
   ASSET_DUNGEON_THUMB: 'assets/monsters/dungeon.jpg',
-  LOG_LIMIT: 8,
+  LOG_LIMIT: 12,
   SMALL_INJURY_PROB: 0.12,
   QUEST_JOURNAL_LIMIT: 4,
   STANCE: {
@@ -55,6 +54,16 @@ const CONFIG = {
   },
   REP_MIN: 0,
   REP_MAX: 100
+};
+
+const QUEST_CONFIG = {
+  spawnRate: 0.6,
+  rewardMultiplier: {
+    S: 1.85,
+    A: 1.4,
+    B: 1.1,
+    C: 0.85
+  }
 };
 
 const FIRST_NAMES = ['Egon', 'Lira', 'Bran', 'Kara', 'Sven', 'Toma', 'Nia', 'Roth', 'Elda', 'Finn', 'Mara', 'Ivo', 'Cael', 'Rina', 'Dane'];
@@ -236,6 +245,54 @@ const EXPLORATION_SCENARIOS = {
 
 const EXPLORATION_SCENARIO_KEYS = Object.keys(EXPLORATION_SCENARIOS);
 const INJURY_MESSAGES = ['작은 찰과상을 입었습니다.', '함정 조각에 살짝 베였습니다.', '체력이 소폭 감소했습니다.', '지친 발걸음으로 속도가 느려졌습니다.'];
+
+const QUEST_TIMELINE_TEMPLATES = {
+  camp: [
+    '모닥불을 피우고 장비를 정비했습니다.',
+    '휴식 중 서약을 나누며 결속을 다졌습니다.',
+    '교대로 경계하며 마음을 가다듬었습니다.',
+    '수비 진형을 구축하고 피로를 달랬습니다.',
+    '감시조와 휴식조를 번갈아 배치해 위험을 낮췄습니다.'
+  ],
+  boss: ['던전 우두머리의 전리품을 회수했습니다.', '최종 방에서 마지막 저항을 꺾었습니다.', '지휘관을 쓰러뜨리고 던전의 위협을 제거했습니다.'],
+  chest: ['밀실에 숨겨진 상자를 열었습니다.', '비밀 저장고에서 귀중품을 획득했습니다.', '봉인 상자를 해제하고 보상을 챙겼습니다.'],
+  trap: ['발판이 꺼지며 위험천만한 함정을 통과했습니다.', '독침이 날아왔지만 피해를 최소화했습니다.', '붕괴된 구역을 돌파하며 장비를 손질했습니다.'],
+  story: ['던전의 벽화에서 고대 기록을 확인했습니다.', '새로운 통로를 지도에 추가했습니다.', '진행 상황을 기록하며 마음을 다잡았습니다.'],
+  fight: ['격렬한 교전을 승리로 이끌었습니다.', '적의 재집결을 저지했습니다.', '위기 상황을 전술로 돌파했습니다.']
+};
+
+const QUEST_EVENT_ICONS = {
+  trap: '⚠️',
+  fight: '⚔️',
+  chest: '💎',
+  boss: '👑',
+  camp: '🔥',
+  story: '📜'
+};
+
+const RETURN_TALE_TEMPLATES = {
+  high: [
+    '{{party}}가 무사 귀환하자 시민들의 환호가 이어졌습니다.',
+    '광장에서 {{party}}에게 축하의 꽃비가 내렸습니다.',
+    '{{party}}의 승전가가 성문을 가득 메웠습니다.'
+  ],
+  mid: [
+    '{{party}}가 작전 보고를 마치고 휴식에 들어갔습니다.',
+    '{{party}}가 약탈품을 정리하며 다음 의뢰를 논의했습니다.',
+    '{{party}}가 조용한 연회장에서 체력을 회복했습니다.'
+  ],
+  low: [
+    '{{party}}가 조용히 본부로 복귀해 부상자를 살폈습니다.',
+    '{{party}}가 들키지 않게 보고서를 남기고 사라졌습니다.',
+    '{{party}}가 묵묵히 장비를 정비하며 다음을 준비했습니다.'
+  ]
+};
+
+const MOOD_TEMPLATES = {
+  fatigue: ['[T{{turn}}] {{name}}이(가) 지친 기색을 감추지 못합니다.', '[T{{turn}}] {{name}}: "잠깐만이라도 눈을 붙이면 좋겠군..."'],
+  benched: ['[T{{turn}}] {{name}}이(가) 한숨을 쉬며 출전을 갈망합니다.', '[T{{turn}}] {{name}}: "다음 임무엔 반드시 참가하게 해줘."'],
+  relationship: ['[T{{turn}}] {{name}}이(가) 길드에 한층 깊은 신뢰를 표했습니다.', '[T{{turn}}] {{name}}: "이번 협력, 잊지 않겠습니다."']
+};
 
 const elements = {
   goldValue: document.getElementById('gold-value'),
@@ -501,7 +558,7 @@ function renderDebugPanel() {
     const show = uiState.showDebugConfig;
     elements.debugConfig.classList.toggle('hidden', !show);
     if (show && elements.configDump) {
-      elements.configDump.textContent = JSON.stringify(CONFIG, null, 2);
+      elements.configDump.textContent = JSON.stringify({ CONFIG, QUEST_CONFIG }, null, 2);
     }
   }
 }
@@ -649,7 +706,13 @@ function addQuestJournalEntry(quest, message) {
   if (!Array.isArray(quest.journal)) {
     quest.journal = [];
   }
-  quest.journal.push(message);
+  const trimmed = typeof message === 'string' ? message.trim() : '';
+  if (!trimmed) {
+    return;
+  }
+  const alreadyTimed = /^\[T\d+\]/.test(trimmed);
+  const entry = alreadyTimed ? trimmed : `[T${state.turn}] ${trimmed}`;
+  quest.journal.push(entry);
   if (quest.journal.length > CONFIG.QUEST_JOURNAL_LIMIT) {
     quest.journal = quest.journal.slice(-CONFIG.QUEST_JOURNAL_LIMIT);
   }
@@ -675,6 +738,138 @@ function computeQuestDifficultyWeight(quest) {
   }
   const total = (Number(quest.req.atk) || 0) + (Number(quest.req.def) || 0) + (Number(quest.req.stam) || 0);
   return Math.max(1, Math.ceil(total / 12));
+}
+
+function renderTemplate(template, context = {}) {
+  if (typeof template !== 'string' || template.length === 0) {
+    return '';
+  }
+  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+    const value = context[key];
+    return value != null ? String(value) : '';
+  });
+}
+
+function ensureQuestTimeline(quest) {
+  if (!quest || typeof quest !== 'object') {
+    return;
+  }
+  if (!Array.isArray(quest.events)) {
+    quest.events = [];
+  }
+  if (!Array.isArray(quest.animKeyTimeline)) {
+    quest.animKeyTimeline = [];
+  }
+  if (typeof quest.campPlaced !== 'boolean') {
+    quest.campPlaced = quest.events.some((entry) => entry && entry.type === 'camp');
+  }
+}
+
+function registerQuestEvent(quest, event) {
+  if (!quest || !event) {
+    return null;
+  }
+  ensureQuestTimeline(quest);
+  const currentTurn = Number.isFinite(event.turn) ? event.turn : (Number.isFinite(state?.turn) ? state.turn : 0);
+  const type = event.type || 'story';
+  const text = typeof event.text === 'string' ? event.text : '';
+  const animKey = event.animKey || type;
+  const entry = { turn: currentTurn, type, text, animKey };
+  quest.events.push(entry);
+  quest.animKeyTimeline.push(animKey);
+  return entry;
+}
+
+function generateReturnAnecdote(assignedMercs) {
+  const reputation = Number.isFinite(state?.reputation) ? state.reputation : 0;
+  const tier = reputation >= 70 ? 'high' : reputation >= 40 ? 'mid' : 'low';
+  const pool = RETURN_TALE_TEMPLATES[tier] || RETURN_TALE_TEMPLATES.mid || [];
+  const template = randomChoice(pool) || '원정대가 담담히 귀환했습니다.';
+  let party = '원정대';
+  if (Array.isArray(assignedMercs) && assignedMercs.length > 0) {
+    const names = assignedMercs.map((merc) => getMercDisplayName(merc)).filter(Boolean);
+    if (names.length <= 2) {
+      party = names.join(', ');
+    } else {
+      const lead = names.slice(0, 2).join(', ');
+      party = `${lead} 외 ${names.length - 2}명`;
+    }
+  }
+  return renderTemplate(template, { party });
+}
+
+function clampMood(value) {
+  const numeric = Number.isFinite(value) ? value : 0;
+  return clamp(Math.round(numeric), 0, 100);
+}
+
+function updateMercMoodStates(activeAssignments) {
+  const moodLogs = [];
+  const threshold = { fatigue: 60, benched: 80, relationship: 75 };
+
+  state.mercs.forEach((merc) => {
+    if (!merc) {
+      return;
+    }
+    const wasFatigue = clampMood(merc.fatigue);
+    const wasBenched = clampMood(merc.benched);
+    const wasRelationship = clampMood(merc.relationship);
+    const isActive = activeAssignments.has(merc.id);
+
+    const fatigueDelta = isActive ? randomInt(8, 14) : -randomInt(4, 8);
+    const relationshipDelta = isActive ? randomInt(2, 5) : -randomInt(0, 3);
+    const benchedDelta = isActive ? -randomInt(10, 18) : randomInt(6, 12);
+
+    merc.fatigue = clampMood(wasFatigue + fatigueDelta);
+    merc.relationship = clampMood(wasRelationship + relationshipDelta);
+    merc.benched = clampMood(wasBenched + benchedDelta);
+    if (!Array.isArray(merc.journal)) {
+      merc.journal = [];
+    }
+
+    const name = getMercDisplayName(merc);
+    const context = { name, turn: state.turn };
+
+    if (merc.fatigue >= threshold.fatigue) {
+      const template = randomChoice(MOOD_TEMPLATES.fatigue) || '';
+      if (template) {
+        moodLogs.push(renderTemplate(template, context));
+      }
+    }
+    if (merc.benched >= threshold.benched) {
+      const template = randomChoice(MOOD_TEMPLATES.benched) || '';
+      if (template) {
+        moodLogs.push(renderTemplate(template, context));
+      }
+    }
+    if (merc.relationship >= threshold.relationship) {
+      const template = randomChoice(MOOD_TEMPLATES.relationship) || '';
+      if (template) {
+        moodLogs.push(renderTemplate(template, context));
+      }
+    }
+  });
+
+  return moodLogs;
+}
+
+function appendMercJournalEntry(merc, text) {
+  if (!merc || !text) {
+    return;
+  }
+  if (!Array.isArray(merc.journal)) {
+    merc.journal = [];
+  }
+  const trimmed = typeof text === 'string' ? text.trim() : '';
+  if (!trimmed) {
+    return;
+  }
+  const alreadyTimed = /^\[T\d+\]/.test(trimmed);
+  const entry = alreadyTimed ? trimmed : `[T${state.turn}] ${trimmed}`;
+  merc.journal.push(entry);
+  if (merc.journal.length > 8) {
+    merc.journal = merc.journal.slice(-8);
+  }
 }
 
 /**
@@ -922,15 +1117,27 @@ function applyAssetFallbacks(list) {
 function newTurn() {
   state.turn += 1;
   const completionLogs = [];
+  const completionReports = [];
   const expirationLogs = [];
   const explorationLogs = [];
   const delayLogs = [];
+
+  const activeAssignments = new Map();
+  (Array.isArray(state.quests) ? state.quests : []).forEach((quest) => {
+    if (!quest || quest.deleted || quest.status !== 'in_progress') {
+      return;
+    }
+    if (Array.isArray(quest.assigned_merc_ids)) {
+      quest.assigned_merc_ids.forEach((id) => activeAssignments.set(id, quest.id));
+    }
+  });
 
   state.quests = (Array.isArray(state.quests) ? state.quests : []).map((quest) => {
     if (!quest || quest.deleted || quest.status === 'empty') {
       return createEmptyQuestSlot(quest);
     }
     if (quest.status === 'in_progress') {
+      ensureQuestTimeline(quest);
       const { config: stanceConfig } = getStanceConfig(quest);
       const effectiveConfig = stanceConfig || CONFIG.STANCE.meticulous;
       const currentRemaining = Number.isFinite(quest.remaining_turns) ? quest.remaining_turns : quest.turns_cost;
@@ -951,8 +1158,10 @@ function newTurn() {
       const scenarioType = randomChoice(EXPLORATION_SCENARIO_KEYS) || 'encounter';
       const basePool = EXPLORATION_SCENARIOS[scenarioType] || [];
       const baseMessage = randomChoice(basePool) || '어둠 속을 조심스럽게 전진했습니다.';
-      addQuestJournalEntry(quest, baseMessage);
       const fragments = [baseMessage];
+      const eventType = scenarioType === 'encounter' ? 'fight' : 'story';
+      registerQuestEvent(quest, { type: eventType, text: baseMessage, animKey: eventType, turn: state.turn });
+      addQuestJournalEntry(quest, baseMessage);
 
       const range = Array.isArray(effectiveConfig.bonusGoldRange) ? effectiveConfig.bonusGoldRange : [0, 0];
       const bonusMin = Math.max(0, Number(range[0]) || 0);
@@ -964,6 +1173,7 @@ function newTurn() {
           const bonusMessage = `상자 발견 (+${bonusGold}G)`;
           fragments.push(bonusMessage);
           addQuestJournalEntry(quest, bonusMessage);
+          registerQuestEvent(quest, { type: 'chest', text: bonusMessage, animKey: 'chest', turn: state.turn });
         }
       }
 
@@ -972,10 +1182,23 @@ function newTurn() {
         const injuryMessage = `작은 부상: ${injuryDetail}`;
         fragments.push(injuryMessage);
         addQuestJournalEntry(quest, injuryMessage);
+        registerQuestEvent(quest, { type: 'trap', text: injuryMessage, animKey: 'trap', turn: state.turn });
+      }
+
+      if (quest.turns_cost > 6 && !quest.campPlaced) {
+        const midpoint = Math.ceil(Math.max(1, Number(quest.turns_cost)) / 2);
+        if (quest.progress >= midpoint) {
+          const campMessage = randomChoice(QUEST_TIMELINE_TEMPLATES.camp) || '야영지를 마련해 숨을 고르었습니다.';
+          quest.campPlaced = true;
+          fragments.push(campMessage);
+          addQuestJournalEntry(quest, campMessage);
+          registerQuestEvent(quest, { type: 'camp', text: campMessage, animKey: 'camp', turn: state.turn });
+        }
       }
 
       const questLabel = formatQuestLogLabel(quest);
-      explorationLogs.push(`[T${state.turn}] ${questLabel}: ${fragments.join(' / ')}`);
+      let replacementQuest = quest;
+      let completed = false;
 
       if (quest.remaining_turns <= 0) {
         const shouldDelay = Math.random() < effectiveConfig.overdueProbPerTurn;
@@ -985,16 +1208,36 @@ function newTurn() {
           const delayMessage = `[T${state.turn}] ${questLabel} 일정 지연: 추가 탐색으로 한 턴이 더 소요됩니다.`;
           delayLogs.push(delayMessage);
           addQuestJournalEntry(quest, '일정 지연: 추가 탐색을 진행합니다.');
-          return quest;
+          fragments.push('일정 지연으로 탐색을 이어갑니다.');
+          registerQuestEvent(quest, {
+            type: 'story',
+            text: '일정 지연: 추가 탐색을 진행합니다.',
+            animKey: 'story',
+            turn: state.turn
+          });
+        } else {
+          const bossMessage = randomChoice(QUEST_TIMELINE_TEMPLATES.boss) || '최종 전투를 마무리했습니다.';
+          fragments.push(bossMessage);
+          addQuestJournalEntry(quest, bossMessage);
+          registerQuestEvent(quest, { type: 'boss', text: bossMessage, animKey: 'boss', turn: state.turn });
+          const { completionMessage, replacement, lootMessage, report } = finalizeQuest(quest);
+          completionLogs.push(completionMessage);
+          if (lootMessage) {
+            completionLogs.push(lootMessage);
+          }
+          if (report) {
+            completionReports.push(report);
+            if (report.returnLog) {
+              completionLogs.push(report.returnLog);
+            }
+          }
+          replacementQuest = replacement;
+          completed = true;
         }
-        const { completionMessage, replacement, lootMessage } = finalizeQuest(quest);
-        completionLogs.push(completionMessage);
-        if (lootMessage) {
-          completionLogs.push(lootMessage);
-        }
-        return replacement;
       }
-      return quest;
+
+      explorationLogs.push(`[T${state.turn}] ${questLabel}: ${fragments.join(' / ')}`);
+      return replacementQuest;
     }
     if (quest.status === 'bid_failed') {
       return generateQuest();
@@ -1012,6 +1255,8 @@ function newTurn() {
     return quest;
   });
 
+  const moodLogs = updateMercMoodStates(activeAssignments);
+
   spawnQuestsForEmptySlots(false);
   ensureQuestSlots();
   syncMercBusyFromQuests();
@@ -1019,6 +1264,7 @@ function newTurn() {
   currentRecruitCandidates = [];
 
   log(`[T${state.turn}] 새 턴이 시작되었습니다.`);
+  moodLogs.forEach((message) => log(message));
   explorationLogs.forEach((message) => log(message));
   delayLogs.forEach((message) => log(message));
   completionLogs.forEach((message) => log(message));
@@ -1026,6 +1272,9 @@ function newTurn() {
 
   save();
   render();
+  if (completionReports.length > 0) {
+    openQuestCompletionReportModal(completionReports);
+  }
   refreshAssetChecklist();
 }
 
@@ -1034,9 +1283,12 @@ function newTurn() {
  * @returns {Quest}
  */
 function generateQuest() {
-  const turns_cost = randomInt(CONFIG.QUEST_TURNS_MIN, CONFIG.QUEST_TURNS_MAX);
-  const reward = randomInt(CONFIG.QUEST_REWARD_MIN, CONFIG.QUEST_REWARD_MAX);
   const tier = rollQuestTier();
+  const [minTurns, maxTurns] = tier === 'S' ? [8, 12] : [5, 6];
+  const turns_cost = randomInt(minTurns, maxTurns);
+  const rewardMultiplier = QUEST_CONFIG.rewardMultiplier[tier] ?? 1;
+  const baseReward = randomInt(CONFIG.QUEST_REWARD_MIN, CONFIG.QUEST_REWARD_MAX);
+  const reward = Math.max(CONFIG.QUEST_REWARD_MIN, Math.round(baseReward * rewardMultiplier));
   const importance = pickQuestImportance(tier);
   return {
     id: `quest_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -1058,6 +1310,9 @@ function generateQuest() {
     progress: 0,
     bonusGold: 0,
     journal: [],
+    events: [],
+    animKeyTimeline: [],
+    campPlaced: false,
     contractProb: createInitialContractProb()
   };
 }
@@ -1083,6 +1338,9 @@ function createEmptyQuestSlot(base = {}) {
     progress: 0,
     bonusGold: 0,
     journal: [],
+    events: [],
+    animKeyTimeline: [],
+    campPlaced: false,
     contractProb: createInitialContractProb()
   };
 }
@@ -1115,7 +1373,7 @@ function createInitialContractProb() {
 }
 
 function spawnQuestsForEmptySlots(force = false) {
-  const rate = Math.min(1, Math.max(0, Number(CONFIG.QUEST_SPAWN_RATE) || 0));
+  const rate = Math.min(1, Math.max(0, Number(QUEST_CONFIG.spawnRate) || 0));
   state.quests = (Array.isArray(state.quests) ? state.quests : []).map((quest) => {
     const isEmpty = !quest || quest.deleted || quest.status === 'empty';
     if (!isEmpty) {
@@ -1190,12 +1448,23 @@ function maybeGenerateQuestLoot(quest) {
 /**
  * Finalize a quest that has completed this turn.
  * @param {Quest} quest
- * @returns {{completionMessage: string, replacement: Quest}}
+ * @returns {{completionMessage: string, replacement: Quest, lootMessage: (string|null), report: {id: string, title: string, events: QuestEvent[], animKeyTimeline: string[], returnTale: string, returnLog: string}}}
  */
 function finalizeQuest(quest) {
   const assignedMercs = quest.assigned_merc_ids
     .map((id) => state.mercs.find((merc) => merc.id === id))
     .filter(Boolean);
+
+  ensureQuestTimeline(quest);
+  const timeline = Array.isArray(quest.events)
+    ? quest.events.map((event) => ({
+        turn: Number.isFinite(event?.turn) ? event.turn : state.turn,
+        type: event?.type || 'story',
+        text: typeof event?.text === 'string' ? event.text : '',
+        animKey: event?.animKey || event?.type || 'story'
+      }))
+    : [];
+  const animTimeline = Array.isArray(quest.animKeyTimeline) ? quest.animKeyTimeline.slice() : [];
 
   const totalWages = assignedMercs.reduce((sum, merc) => sum + (merc.wage_per_quest || 0), 0);
   const previousGold = state.gold;
@@ -1204,10 +1473,6 @@ function finalizeQuest(quest) {
   const finalReward = contractValue + bonusGold;
   const netGain = finalReward - totalWages;
   state.gold = Math.max(0, state.gold + netGain);
-
-  assignedMercs.forEach((merc) => {
-    merc.busy = false;
-  });
 
   const { config: stanceConfig } = getStanceConfig(quest);
   const penaltyBase = stanceConfig?.repPenaltyBase || 0;
@@ -1236,10 +1501,27 @@ function finalizeQuest(quest) {
 
   const lootResult = maybeGenerateQuestLoot(quest);
 
+  const returnTale = generateReturnAnecdote(assignedMercs);
+  const questTitle = getQuestDisplayTitle(quest);
+  const returnLog = `[T${state.turn}] 귀환 보고: ${returnTale}`;
+
+  assignedMercs.forEach((merc) => {
+    merc.busy = false;
+    appendMercJournalEntry(merc, `${questTitle} · ${returnTale}`);
+  });
+
   return {
     completionMessage: `${baseMessage}${repNoteText}`,
     replacement: generateQuest(),
-    lootMessage: lootResult ? lootResult.log : null
+    lootMessage: lootResult ? lootResult.log : null,
+    report: {
+      id: quest.id,
+      title: questTitle,
+      events: timeline,
+      animKeyTimeline: animTimeline,
+      returnTale,
+      returnLog
+    }
   };
 }
 
@@ -1289,6 +1571,7 @@ function ensureQuestSlots() {
     if (!Array.isArray(quest.journal)) {
       quest.journal = [];
     }
+    ensureQuestTimeline(quest);
     quest.contractProb = normalizeContractProb(quest.contractProb, quest.bids, state.rivals);
     quest.deleted = false;
     return quest;
@@ -1346,13 +1629,26 @@ function normalizeMerc(merc) {
   const age = Number.isFinite(merc.age)
     ? Math.max(18, Math.round(merc.age))
     : clamp(randomInt(20, 38), 18, 48);
+  const fatigue = clampMood(merc.fatigue);
+  const relationship = clampMood(merc.relationship || 30);
+  const benched = clampMood(merc.benched);
+  const journal = Array.isArray(merc.journal)
+    ? merc.journal
+        .map((entry) => (typeof entry === 'string' ? entry : ''))
+        .filter((entry) => entry && entry.trim().length > 0)
+        .slice(-8)
+    : [];
   return {
     ...merc,
     name,
     grade,
     level,
     age,
-    busy: Boolean(merc.busy)
+    busy: Boolean(merc.busy),
+    fatigue,
+    relationship,
+    benched,
+    journal
   };
 }
 
@@ -1398,7 +1694,13 @@ function normalizeQuest(quest, rivals = DEFAULT_RIVALS) {
     remaining_turns: status === 'in_progress'
       ? Math.max(0, Number(quest.remaining_turns) || turns_cost)
       : 0,
-    assigned_merc_ids: Array.isArray(quest.assigned_merc_ids) && status === 'in_progress' ? quest.assigned_merc_ids : []
+    assigned_merc_ids: Array.isArray(quest.assigned_merc_ids) && status === 'in_progress' ? quest.assigned_merc_ids : [],
+    journal: Array.isArray(quest.journal)
+      ? quest.journal
+          .map((entry) => (typeof entry === 'string' ? entry : ''))
+          .filter((entry) => entry && entry.trim().length > 0)
+          .slice(-CONFIG.QUEST_JOURNAL_LIMIT)
+      : []
   };
   if (typeof quest.started_turn === 'number') {
     normalized.started_turn = quest.started_turn;
@@ -1408,6 +1710,19 @@ function normalizeQuest(quest, rivals = DEFAULT_RIVALS) {
     normalized.remaining_turns = 0;
     normalized.assigned_merc_ids = [];
   }
+  const events = Array.isArray(quest.events)
+    ? quest.events.map((event) => ({
+        turn: Number.isFinite(event?.turn) ? event.turn : normalized.started_turn || state.turn || 0,
+        type: event?.type || 'story',
+        text: typeof event?.text === 'string' ? event.text : '',
+        animKey: event?.animKey || event?.type || 'story'
+      }))
+    : [];
+  normalized.events = events;
+  normalized.animKeyTimeline = Array.isArray(quest.animKeyTimeline)
+    ? quest.animKeyTimeline.filter((key) => typeof key === 'string' && key.trim().length > 0)
+    : [];
+  normalized.campPlaced = Boolean(quest.campPlaced) || events.some((event) => event.type === 'camp');
   const visibleValue = Math.round(Number(quest.remaining_visible_turns));
   if (status === 'ready') {
     normalized.remaining_visible_turns = clamp(
@@ -2278,6 +2593,10 @@ function startQuestAfterBid(quest, assignedMercs, playerBid, stance, probabiliti
   quest.contractProb = normalizeContractProb(probabilities, quest.bids, state.rivals);
   quest.stance = typeof stance === 'string' ? stance : 'meticulous';
   quest.journal = Array.isArray(quest.journal) ? quest.journal.slice(-CONFIG.QUEST_JOURNAL_LIMIT) : [];
+  ensureQuestTimeline(quest);
+  quest.events = [];
+  quest.animKeyTimeline = [];
+  quest.campPlaced = false;
   assignedMercs.forEach((merc) => {
     merc.busy = true;
   });
@@ -2285,6 +2604,7 @@ function startQuestAfterBid(quest, assignedMercs, playerBid, stance, probabiliti
   syncMercBusyFromQuests();
 
   addQuestJournalEntry(quest, '탐험을 시작했습니다.');
+  registerQuestEvent(quest, { type: 'story', text: '탐험을 시작했습니다.', animKey: 'story', turn: state.turn });
   const stanceLabel = quest.stance === 'on_time' ? '기한 준수' : '꼼꼼히 탐색';
   log(`[T${state.turn}] 퀘스트 시작 ${quest.id}: 입찰가 ${playerBid}G, ${assignedMercs.length}명 투입, ${quest.turns_cost}턴 소요 예정. (성향: ${stanceLabel})`);
 
@@ -2292,6 +2612,83 @@ function startQuestAfterBid(quest, assignedMercs, playerBid, stance, probabiliti
   save();
   render();
   refreshAssetChecklist();
+}
+
+function openQuestCompletionReportModal(reports) {
+  if (!Array.isArray(reports) || reports.length === 0) {
+    return;
+  }
+  const [primary, ...rest] = reports;
+  const titleText = primary?.title ? `${primary.title} 완료 리포트` : '퀘스트 완료 리포트';
+  resetModalRequirementSummary();
+  elements.modalTitle.textContent = titleText;
+  elements.modalBody.innerHTML = '';
+
+  const container = document.createElement('div');
+  container.className = 'quest-report';
+
+  const heading = document.createElement('h4');
+  heading.className = 'quest-report__heading';
+  heading.textContent = '이벤트 타임라인';
+  container.appendChild(heading);
+
+  const timeline = document.createElement('ol');
+  timeline.className = 'quest-report__timeline';
+  const events = Array.isArray(primary?.events) ? primary.events : [];
+  if (events.length === 0) {
+    const emptyItem = document.createElement('li');
+    emptyItem.className = 'quest-report__event quest-report__event--empty';
+    emptyItem.textContent = '등록된 이벤트가 없습니다.';
+    timeline.appendChild(emptyItem);
+  } else {
+    events.forEach((event) => {
+      const type = event?.type || 'story';
+      const item = document.createElement('li');
+      item.className = `quest-report__event quest-report__event--${type}`;
+      const animKey = event?.animKey || type;
+      item.dataset.animKey = animKey;
+
+      const icon = document.createElement('span');
+      icon.className = 'quest-report__icon';
+      icon.textContent = QUEST_EVENT_ICONS[type] || QUEST_EVENT_ICONS.story;
+
+      const body = document.createElement('div');
+      body.className = 'quest-report__event-body';
+
+      const turn = document.createElement('span');
+      turn.className = 'quest-report__event-turn';
+      const turnValue = Number.isFinite(event?.turn) ? event.turn : state.turn;
+      turn.textContent = `T${turnValue}`;
+
+      const text = document.createElement('span');
+      text.className = 'quest-report__event-text';
+      text.textContent = event?.text || '기록 없음';
+
+      body.append(turn, text);
+      item.append(icon, body);
+      timeline.appendChild(item);
+    });
+  }
+  container.appendChild(timeline);
+
+  const returnSection = document.createElement('div');
+  returnSection.className = 'quest-report__return';
+  const returnLabel = document.createElement('strong');
+  returnLabel.textContent = '귀환 일화';
+  const returnText = document.createElement('p');
+  returnText.textContent = primary?.returnTale || '귀환 보고가 기록되지 않았습니다.';
+  returnSection.append(returnLabel, returnText);
+  container.appendChild(returnSection);
+
+  if (rest.length > 0) {
+    const note = document.createElement('div');
+    note.className = 'quest-report__note';
+    note.textContent = `추가 완료 ${rest.length}건은 로그에서 확인하세요.`;
+    container.appendChild(note);
+  }
+
+  elements.modalBody.appendChild(container);
+  openModal();
 }
 
 function markQuestBidFailure(quest, winner, probabilities) {
@@ -2412,6 +2809,15 @@ function renderMercs() {
     header.append(identity, wage);
     card.appendChild(header);
 
+    const moodRow = document.createElement('div');
+    moodRow.className = 'merc-card__mood';
+    moodRow.append(
+      createMoodBadge('🔥', clampMood(merc.fatigue), '피로도'),
+      createMoodBadge('🤝', clampMood(merc.relationship), '관계도'),
+      createMoodBadge('💤', clampMood(merc.benched), '벤치 체류')
+    );
+    card.appendChild(moodRow);
+
     const slots = document.createElement('div');
     slots.className = 'merc-card__slots';
     slots.append(createSlotGroup('스킬'), createSlotGroup('장비'));
@@ -2432,6 +2838,15 @@ function renderMercs() {
     card.addEventListener('click', () => openMercDetails(merc.id));
     elements.mercList.appendChild(card);
   });
+}
+
+function createMoodBadge(icon, value, label) {
+  const badge = document.createElement('span');
+  badge.className = 'merc-card__mood-badge';
+  const safeValue = clampMood(value);
+  badge.textContent = `${icon} ${safeValue}`;
+  badge.title = `${label} ${safeValue}/100`;
+  return badge;
 }
 
 function createSlotGroup(labelText) {
@@ -2488,6 +2903,13 @@ function openMercDetails(mercId) {
     { label: '상태', value: statusValue }
   ]);
   leftColumn.appendChild(basicSection);
+
+  const moodSection = createDetailSection('감정 상태', [
+    { label: '피로도', value: `${clampMood(merc.fatigue)}/100` },
+    { label: '관계도', value: `${clampMood(merc.relationship)}/100` },
+    { label: '벤치 체류', value: `${clampMood(merc.benched)}/100` }
+  ]);
+  leftColumn.appendChild(moodSection);
 
   const statsSection = createDetailSection('능력치');
   const statGrid = document.createElement('div');
@@ -2603,6 +3025,15 @@ function buildMercChronicle(merc) {
     if (parsed.text.includes(displayName) || parsed.text.includes(baseName)) {
       entries.push(parsed);
     }
+  });
+
+  const personalNotes = Array.isArray(merc.journal) ? merc.journal.slice().reverse() : [];
+  personalNotes.forEach((note, index) => {
+    if (entries.length >= 10) {
+      return;
+    }
+    const parsed = parseJournalEntry(note, state.turn, index);
+    entries.push({ turn: parsed.turn, text: parsed.text });
   });
 
   (Array.isArray(state.quests) ? state.quests : []).forEach((quest) => {
@@ -3005,10 +3436,11 @@ function renderQuests() {
         emptyEntry.textContent = '최근 탐험 로그 없음';
         journal.appendChild(emptyEntry);
       } else {
-        recentEntries.forEach((entry) => {
+        recentEntries.forEach((entry, index) => {
           const line = document.createElement('div');
           line.className = 'quest-card__journal-entry';
-          line.textContent = entry;
+          const parsed = parseJournalEntry(entry, quest.started_turn, index);
+          line.textContent = parsed.turn ? `T${parsed.turn} · ${parsed.text}` : parsed.text;
           journal.appendChild(line);
         });
       }
@@ -3316,7 +3748,11 @@ function generateMerc() {
     wage_per_quest,
     level,
     age,
-    busy: false
+    busy: false,
+    fatigue: randomInt(5, 15),
+    relationship: randomInt(35, 55),
+    benched: randomInt(10, 25),
+    journal: []
   };
 }
 
@@ -3359,7 +3795,7 @@ function randomVisibleTurns() {
 }
 
 function formatSpawnRate() {
-  const rate = Math.min(1, Math.max(0, Number(CONFIG.QUEST_SPAWN_RATE) || 0));
+  const rate = Math.min(1, Math.max(0, Number(QUEST_CONFIG.spawnRate) || 0));
   const percentage = rate * 100;
   const formatted = Number.isInteger(percentage) ? percentage.toFixed(0) : percentage.toFixed(1);
   return `${formatted}%`;
@@ -3385,6 +3821,16 @@ function formatSpawnRate() {
  * @property {number} signing_bonus
  * @property {number} wage_per_quest
  * @property {boolean} busy
+ * @property {number} fatigue
+ * @property {number} relationship
+ * @property {number} benched
+ * @property {string[]} journal
+ *
+ * @typedef {Object} QuestEvent
+ * @property {number} turn
+ * @property {'trap'|'fight'|'chest'|'boss'|'camp'|'story'} type
+ * @property {string} text
+ * @property {string} animKey
  *
  * @typedef {Object} Quest
  * @property {string} id
@@ -3408,6 +3854,9 @@ function formatSpawnRate() {
  * @property {number} bonusGold
  * @property {{[key: string]: number}} contractProb
  * @property {string[]} journal
+ * @property {QuestEvent[]} events
+ * @property {string[]} animKeyTimeline
+ * @property {boolean} campPlaced
  *
  * @typedef {{id: string, name: string, rep: number}} Rival
  */
