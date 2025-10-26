@@ -37,7 +37,6 @@ const CONFIG = {
   QUEST_TURNS_MAX: 12,
   RECRUIT_ONCE_PER_TURN: true,
   ASSET_BG: 'assets/bg/medieval.jpg',
-  ASSET_MERC: (mercId) => `assets/mercs/${mercId}.jpg`,
   ASSET_DUNGEON_THUMB: 'assets/monsters/dungeon.jpg',
   LOG_LIMIT: 12,
   SMALL_INJURY_PROB: 0.12,
@@ -204,6 +203,7 @@ let state = {
   quests: [],
   log: [],
   lastRecruitTurn: null,
+  recruitPool: [],
   reputation: CONFIG.START_REPUTATION,
   rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival })),
   inventory: createEmptyInventory(),
@@ -266,6 +266,12 @@ function ensurePool() {
   }
   if (!state.pool.namedArchive || typeof state.pool.namedArchive !== 'object') {
     state.pool.namedArchive = {};
+  }
+}
+
+function ensureRecruitPool() {
+  if (!Array.isArray(state.recruitPool)) {
+    state.recruitPool = [];
   }
 }
 
@@ -552,6 +558,31 @@ function normalizePool(rawPool, options = {}) {
     });
   }
   return normalized;
+}
+
+function normalizeRecruitPool(rawPool, options = {}) {
+  if (!Array.isArray(rawPool)) {
+    return [];
+  }
+  return rawPool
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      const normalized = normalizeMerc(entry, {
+        skipCodexUpdate: true,
+        saveVersion: options.saveVersion ?? SAVE_VERSION
+      });
+      if (!normalized) {
+        return null;
+      }
+      assignMercPortrait(normalized);
+      if (entry.hired) {
+        return null;
+      }
+      return { ...normalized, hired: false };
+    })
+    .filter(Boolean);
 }
 
 function ensureCodexEntry(merc, allowCreate = false) {
@@ -1046,6 +1077,10 @@ async function init() {
   }
 }
 
+if (typeof window !== 'undefined') {
+  window.handleHireClick = handleHireClick;
+}
+
 document.addEventListener('DOMContentLoaded', init);
 
 /**
@@ -1369,6 +1404,7 @@ function performNewGameReset() {
   resetCodexUIState();
   clearAllTempSelections();
   currentRecruitCandidates = [];
+  state.recruitPool = [];
   uiState.activeMainTab = 'quests';
   uiState.activeInventoryTab = 'currency';
   uiState.backgroundDimmed = false;
@@ -1769,6 +1805,7 @@ function load() {
           : [],
         log: Array.isArray(parsed.log) ? parsed.log.slice(-CONFIG.LOG_LIMIT) : [],
         lastRecruitTurn: typeof parsed.lastRecruitTurn === 'number' ? parsed.lastRecruitTurn : null,
+        recruitPool: normalizeRecruitPool(parsed.recruitPool, { saveVersion: meta.saveVersion }),
         reputation: normalizedReputation,
         rivals: normalizedRivals,
         inventory: normalizeInventory(parsed.inventory),
@@ -1776,6 +1813,7 @@ function load() {
         codex: normalizeCodex(parsed.codex),
         pool: normalizePool(parsed.pool, { saveVersion: meta.saveVersion })
       };
+      currentRecruitCandidates = state.recruitPool;
       loadedFromStorage = true;
     } catch (error) {
       console.warn('Failed to parse stored state, starting fresh.', error);
@@ -1790,6 +1828,7 @@ function load() {
       quests: [],
       log: [],
       lastRecruitTurn: null,
+      recruitPool: [],
       reputation: CONFIG.START_REPUTATION,
       rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival })),
       inventory: createEmptyInventory(),
@@ -1797,6 +1836,7 @@ function load() {
       codex: createEmptyCodex(),
       pool: createDefaultPools()
     };
+    currentRecruitCandidates = state.recruitPool;
     needsResave = true;
   }
 
@@ -1852,6 +1892,7 @@ function save() {
     quests: state.quests,
     log: state.log,
     lastRecruitTurn: state.lastRecruitTurn,
+    recruitPool: state.recruitPool,
     reputation: state.reputation,
     rivals: state.rivals,
     inventory: state.inventory,
@@ -1860,6 +1901,10 @@ function save() {
     pool: state.pool
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+}
+
+function persistState() {
+  save();
 }
 
 /**
@@ -1873,7 +1918,7 @@ function ensureFoldersNote() {
     <p>이미지는 직접 업로드가 필요합니다. 아래 경로로 파일을 추가하세요.</p>
     <ul class="asset-note__list">
       <li>배경 → <code>${CONFIG.ASSET_BG}</code></li>
-      <li>용병 예: m1 → <code>${CONFIG.ASSET_MERC('m1')}</code></li>
+      <li>용병 예: m01 → <code>assets/mercs/m01.jpg</code></li>
       <li>던전 썸네일 → <code>${CONFIG.ASSET_DUNGEON_THUMB}</code></li>
       <li>업로드 후 하드 리로드(Ctrl+F5 / ⌘+Shift+R)</li>
     </ul>
@@ -1893,11 +1938,19 @@ function computeRequiredAssets() {
     required.add(CONFIG.ASSET_DUNGEON_THUMB);
   }
   state.mercs.forEach((merc) => {
-    const mercPath = CONFIG.ASSET_MERC ? CONFIG.ASSET_MERC(merc.id) : null;
+    const mercPath = getMercPortraitPath(merc);
     if (mercPath) {
       required.add(mercPath);
     }
   });
+  ensureRecruitPool();
+  state.recruitPool.forEach((candidate) => {
+    const mercPath = getMercPortraitPath(candidate);
+    if (mercPath) {
+      required.add(mercPath);
+    }
+  });
+  required.add('assets/mercs/default.jpg');
   return Array.from(required);
 }
 
@@ -2205,7 +2258,7 @@ function newTurn() {
     if (quest.status === 'bid_failed') {
       return generateQuest();
     }
-    if (quest.status === 'preparing') {
+    if (quest.status === 'awarded') {
       return quest;
     }
     if (quest.status === 'ready') {
@@ -2228,7 +2281,8 @@ function newTurn() {
   syncMercBusyFromQuests();
   archiveCurrentRecruitPool();
   state.lastRecruitTurn = null;
-  currentRecruitCandidates = [];
+  state.recruitPool = [];
+  currentRecruitCandidates = state.recruitPool;
 
   log(`[T${state.turn}] 새 턴이 시작되었습니다.`);
   moodLogs.forEach((message) => log(message));
@@ -2675,6 +2729,7 @@ function normalizeMerc(merc, options = {}) {
   if (!options.skipCodexUpdate) {
     updateCodexEntryFromMerc(normalized, { lastSeenTurn: lastSeen });
   }
+  assignMercPortrait(normalized);
   return normalized;
 }
 
@@ -2691,8 +2746,8 @@ function normalizeQuest(quest, rivals = DEFAULT_RIVALS, options = {}) {
     ? 'in_progress'
     : quest.status === 'bid_failed'
       ? 'bid_failed'
-      : quest.status === 'preparing'
-        ? 'preparing'
+      : quest.status === 'preparing' || quest.status === 'awarded'
+        ? 'awarded'
         : 'ready';
   const recommended = quest.recommended && typeof quest.recommended === 'object'
     ? {
@@ -2921,7 +2976,8 @@ function archiveCandidateForReappearance(candidate) {
 
 function archiveCurrentRecruitPool() {
   let archived = false;
-  (Array.isArray(currentRecruitCandidates) ? currentRecruitCandidates : []).forEach((candidate) => {
+  ensureRecruitPool();
+  state.recruitPool.forEach((candidate) => {
     if (archiveCandidateForReappearance(candidate)) {
       archived = true;
     }
@@ -2955,6 +3011,7 @@ function reviveNamedCandidate(archived) {
   revived.revisitCount = merged.count;
   revived.cooldownUntilTurn = null;
   revived.isReturning = true;
+  assignMercPortrait(revived);
   return revived;
 }
 
@@ -3056,11 +3113,13 @@ function openRecruit() {
     return;
   }
 
-  if (state.lastRecruitTurn !== state.turn || currentRecruitCandidates.length === 0) {
+  ensureRecruitPool();
+  if (state.lastRecruitTurn !== state.turn || state.recruitPool.length === 0) {
     archiveCurrentRecruitPool();
-    currentRecruitCandidates = buildRecruitCandidates();
+    state.recruitPool = buildRecruitCandidates();
   }
 
+  currentRecruitCandidates = state.recruitPool;
   state.lastRecruitTurn = state.turn;
   save();
 
@@ -3080,7 +3139,15 @@ function renderRecruitModalBody() {
   description.className = 'modal-description';
   elements.modalBody.appendChild(description);
 
-  currentRecruitCandidates.forEach((candidate) => {
+  ensureRecruitPool();
+  if (state.recruitPool.length === 0) {
+    const emptyNote = document.createElement('p');
+    emptyNote.className = 'modal-subtle';
+    emptyNote.textContent = '현재 모집 가능한 용병이 없습니다.';
+    elements.modalBody.appendChild(emptyNote);
+    return;
+  }
+  state.recruitPool.forEach((candidate) => {
     const card = document.createElement('div');
     card.className = 'recruit-card';
     if (candidate.hired) {
@@ -3121,7 +3188,7 @@ function renderRecruitModalBody() {
     if (candidate.hired) {
       hireBtn.classList.add('btn--disabled');
     } else {
-      hireBtn.addEventListener('click', () => hireMerc(candidate.id));
+      hireBtn.addEventListener('click', () => handleHireClick(candidate.id));
     }
 
     if (tagRow) {
@@ -3135,31 +3202,42 @@ function renderRecruitModalBody() {
 }
 
 /**
- * Attempt to hire a mercenary and deduct the signing bonus.
+ * Handle hire button click and immediately reflect the new mercenary.
  * @param {string} mercId
  */
-function hireMerc(mercId) {
-  const candidate = currentRecruitCandidates.find((merc) => merc.id === mercId);
+function handleHireClick(mercId) {
+  ensureRecruitPool();
+  const index = state.recruitPool.findIndex((merc) => merc && merc.id === mercId);
+  if (index === -1) {
+    return;
+  }
+  const candidate = state.recruitPool[index];
   if (!candidate || candidate.hired) {
     return;
   }
 
-  if (state.gold < candidate.signing_bonus) {
+  const cost = Math.max(0, Number(candidate.signing_bonus) || 0);
+  if (state.gold < cost) {
+    toast('골드가 부족합니다.');
     log(`[T${state.turn}] 골드가 부족하여 ${candidate.name} 용병을 고용할 수 없습니다.`);
     return;
   }
 
-  state.gold -= candidate.signing_bonus;
-  candidate.hired = true;
+  state.gold -= cost;
   const hiredMerc = { ...candidate };
   delete hiredMerc.hired;
+  assignMercPortrait(hiredMerc);
   state.mercs.push(hiredMerc);
   addToCodexOnHire(hiredMerc);
   updateCodexEntryFromMerc(hiredMerc, { lastSeenTurn: state.turn });
-  log(`[T${state.turn}] ${candidate.name} [${candidate.grade}] 용병을 고용했습니다. 계약금 ${candidate.signing_bonus}G 지급.`);
-  save();
-  render();
-  renderRecruitModalBody();
+  state.recruitPool.splice(index, 1);
+  currentRecruitCandidates = state.recruitPool;
+  log(`[T${state.turn}] ${candidate.name} [${candidate.grade}] 용병을 고용했습니다. 계약금 ${cost}G 지급.`);
+  persistState();
+  renderGold();
+  renderMercenaryList();
+  renderRecruitPool();
+  renderCodex();
   refreshAssetChecklist();
 }
 
@@ -3189,8 +3267,8 @@ function openQuestAssignModal(questId) {
     return;
   }
 
-  if (quest.status === 'preparing') {
-    openQuestPreparationModal(quest);
+  if (quest.status === 'awarded') {
+    openFormationModal(quest.id);
     return;
   }
 
@@ -3202,8 +3280,14 @@ function openQuestAssignModal(questId) {
   log('현재 처리할 수 없는 퀘스트 상태입니다.');
 }
 
-function openQuestPreparationModal(quest) {
+function openFormationModal(questId) {
+  const quest = state.quests.find((entry) => entry.id === questId);
   if (!quest) {
+    toast('선택한 퀘스트를 찾을 수 없습니다.');
+    return;
+  }
+  if (quest.status !== 'awarded') {
+    toast('편성은 낙찰된 퀘스트에서만 가능합니다.');
     return;
   }
   currentQuestId = quest.id;
@@ -3214,11 +3298,10 @@ function openQuestPreparationModal(quest) {
   const assignedIds = Array.isArray(quest.assigned_merc_ids) ? quest.assigned_merc_ids : [];
   const previewIds = Array.isArray(quest.preparation_preview) ? quest.preparation_preview : [];
   const savedIds = Array.isArray(draft.mercs) ? draft.mercs : [];
+  const availableMercs = state.mercs.filter((merc) => !merc.busy);
+  const availableIds = new Set(availableMercs.map((merc) => merc.id));
   const initialSelection = (assignedIds.length > 0 ? assignedIds : savedIds.length > 0 ? savedIds : previewIds)
-    .filter((mercId) => {
-      const merc = state.mercs.find((entry) => entry.id === mercId);
-      return merc && (!merc.busy || assignedIds.includes(mercId));
-    });
+    .filter((mercId) => availableIds.has(mercId));
   const defaultStance = draft.stance || quest.pending_stance || quest.stance || 'meticulous';
   setTempQuestDraft(quest.id, { mercs: initialSelection, stance: defaultStance });
   const currentDraft = getTempQuestDraft(quest.id);
@@ -3314,7 +3397,6 @@ function openQuestPreparationModal(quest) {
 
   const list = document.createElement('div');
   list.className = 'assign-list';
-  const availableMercs = state.mercs.filter((merc) => !merc.busy || assignedIds.includes(merc.id));
 
   const sumStatElements = {};
   if (elements.modalReqSum) {
@@ -3407,14 +3489,9 @@ function openQuestPreparationModal(quest) {
 
   confirmBtn.addEventListener('click', () => {
     const selectedIds = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map((input) => input.value);
-    const selectedMercs = selectedIds
-      .map((id) => state.mercs.find((entry) => entry.id === id))
-      .filter(Boolean);
-    if (selectedMercs.length === 0 || !currentDraft.stance) {
-      return;
-    }
-    startQuestDeployment(quest, selectedMercs, currentDraft.stance);
-    closeModal();
+    currentDraft.mercs = selectedIds;
+    setTempQuestDraft(quest.id, currentDraft);
+    confirmFormation(quest.id);
   });
 
   actions.append(cancelBtn, confirmBtn);
@@ -3422,6 +3499,44 @@ function openQuestPreparationModal(quest) {
 
   updateSelectionUI();
   openModal();
+}
+
+function confirmFormation(questId) {
+  const quest = state.quests.find((entry) => entry.id === questId);
+  if (!quest) {
+    toast('선택한 퀘스트를 찾을 수 없습니다.');
+    return;
+  }
+  if (quest.status !== 'awarded') {
+    toast('편성은 낙찰된 퀘스트에서만 가능합니다.');
+    return;
+  }
+  const draft = getTempQuestDraft(quest.id);
+  const selectedIds = Array.isArray(draft.mercs)
+    ? draft.mercs.filter((id) => typeof id === 'string')
+    : [];
+  if (selectedIds.length === 0) {
+    toast('배치할 용병을 선택하세요.');
+    return;
+  }
+  const assignedMercs = selectedIds
+    .map((id) => state.mercs.find((merc) => merc.id === id && !merc.busy))
+    .filter(Boolean);
+  if (assignedMercs.length === 0) {
+    toast('배치할 용병을 선택하세요.');
+    return;
+  }
+  if (!draft.stance && !quest.pending_stance && !quest.stance) {
+    toast('탐험 성향을 선택하세요.');
+    return;
+  }
+  const stance = draft.stance || quest.pending_stance || quest.stance || 'meticulous';
+  startQuestDeployment(quest, assignedMercs, stance);
+  persistState();
+  renderQuests();
+  renderMercenaryList();
+  refreshAssetChecklist();
+  closeModal();
 }
 
 function startQuestDeployment(quest, assignedMercs, stance) {
@@ -3464,9 +3579,6 @@ function startQuestDeployment(quest, assignedMercs, stance) {
   log(`[T${state.turn}] 퀘스트 ${quest.id} 시작: ${mercIds.length}명 투입, 성향 ${stanceLabel}.`);
 
   clearTempQuestDraft(quest.id);
-  save();
-  render();
-  refreshAssetChecklist();
 }
 
 function openBidModal(quest) {
@@ -3921,7 +4033,7 @@ function enterQuestPreparation(quest, previewMercs, stance, playerBid, probabili
   const previewIds = Array.isArray(previewMercs)
     ? previewMercs.map((merc) => merc && merc.id).filter((id) => typeof id === 'string')
     : [];
-  quest.status = 'preparing';
+  quest.status = 'awarded';
   quest.assigned_merc_ids = [];
   quest.preparation_preview = previewIds;
   quest.pending_stance = typeof stance === 'string' && CONFIG.STANCE[stance] ? stance : 'meticulous';
@@ -4085,12 +4197,64 @@ function log(message) {
   renderLogs();
 }
 
+function renderGold() {
+  if (elements.goldValue) {
+    elements.goldValue.textContent = `${state.gold}G`;
+  }
+}
+
+function renderMercenaryList() {
+  renderMercs();
+}
+
+function renderRecruitPool() {
+  if (
+    elements.modalOverlay
+    && !elements.modalOverlay.classList.contains('hidden')
+    && elements.modalTitle.textContent.includes('용병 모집')
+  ) {
+    renderRecruitModalBody();
+  }
+}
+
+function toast(message, options = {}) {
+  if (!message) {
+    return;
+  }
+  const container = document.getElementById('toast-container');
+  if (!container) {
+    if (typeof window !== 'undefined' && window.alert) {
+      window.alert(message);
+    }
+    return;
+  }
+  const toastEl = document.createElement('div');
+  toastEl.className = 'toast-message';
+  toastEl.textContent = message;
+  if (options.type) {
+    toastEl.dataset.type = options.type;
+  }
+  container.appendChild(toastEl);
+  requestAnimationFrame(() => {
+    toastEl.classList.add('is-visible');
+  });
+  const duration = Math.max(1500, Number(options.duration) || 2500);
+  setTimeout(() => {
+    toastEl.classList.remove('is-visible');
+    setTimeout(() => {
+      if (toastEl.parentNode === container) {
+        container.removeChild(toastEl);
+      }
+    }, 300);
+  }, duration);
+}
+
 /**
  * Render all UI components from the current state.
  */
 function render() {
   updateMercDisplayNameCache();
-  elements.goldValue.textContent = `${state.gold}G`;
+  renderGold();
   renderReputationDisplay();
   renderCalendar();
   renderQuestSpawnRate();
@@ -5000,7 +5164,7 @@ function createPortraitElement(merc) {
   initials.className = 'portrait__fallback';
   initials.textContent = getMercInitials(merc.name);
 
-  const assetPath = CONFIG.ASSET_MERC ? CONFIG.ASSET_MERC(merc.id) : '';
+  const assetPath = getMercPortraitPath(merc) || '';
   if (assetPath) {
     const img = document.createElement('img');
     img.alt = `${merc.name} 초상화`;
@@ -5057,7 +5221,7 @@ function renderQuests() {
     card.className = 'quest-card';
     const isInProgress = quest.status === 'in_progress';
     const isBidFailed = quest.status === 'bid_failed';
-    const isPreparing = quest.status === 'preparing';
+    const isAwarded = quest.status === 'awarded';
     const isOverdue = Boolean(quest.overdue);
     if (isInProgress) {
       card.classList.add('quest-card--in-progress');
@@ -5065,7 +5229,7 @@ function renderQuests() {
     if (isBidFailed) {
       card.classList.add('quest-card--bid-failed');
     }
-    if (isPreparing) {
+    if (isAwarded) {
       card.classList.add('quest-card--preparing');
     }
     if (isOverdue) {
@@ -5107,7 +5271,7 @@ function renderQuests() {
     } else if (isBidFailed) {
       statusBadge.textContent = '낙찰 실패';
       statusBadge.classList.add('quest-card__status-badge--failed');
-    } else if (isPreparing) {
+    } else if (isAwarded) {
       statusBadge.textContent = '준비 단계';
       statusBadge.classList.add('quest-card__status-badge--preparing');
     } else {
@@ -5120,7 +5284,7 @@ function renderQuests() {
       stanceTag.className = `quest-card__stance quest-card__stance--${quest.stance}`;
       stanceTag.textContent = quest.stance === 'on_time' ? '성향: 기한 준수' : '성향: 꼼꼼히 탐색';
       meta.appendChild(stanceTag);
-    } else if (isPreparing && quest.pending_stance) {
+    } else if (isAwarded && quest.pending_stance) {
       const stanceTag = document.createElement('span');
       stanceTag.className = `quest-card__stance quest-card__stance--${quest.pending_stance}`;
       stanceTag.textContent = quest.pending_stance === 'on_time' ? '예정 성향: 기한 준수' : '예정 성향: 꼼꼼히 탐색';
@@ -5155,7 +5319,7 @@ function renderQuests() {
         .filter(Boolean)
         .map((merc) => getMercDisplayName(merc));
       assigned.textContent = assignedNames.length > 0 ? `투입: ${assignedNames.join(', ')}` : '투입 용병 없음';
-    } else if (isPreparing) {
+    } else if (isAwarded) {
       const previewIds = Array.isArray(quest.preparation_preview) ? quest.preparation_preview : [];
       const previewNames = previewIds
         .map((id) => state.mercs.find((merc) => merc.id === id))
@@ -5175,7 +5339,7 @@ function renderQuests() {
     statsLabel.textContent = '현재 합계';
     selectedStats.appendChild(statsLabel);
 
-    const previewTotals = isPreparing
+    const previewTotals = isAwarded
       ? computeSelectedStats(Array.isArray(quest.preparation_preview) ? quest.preparation_preview : [])
       : null;
     const totals = previewTotals || getQuestAssignedTotals(quest);
@@ -5224,7 +5388,7 @@ function renderQuests() {
         : `진행 ${currentProgress}턴 / 목표 ${plannedTurns}턴`;
     } else if (isBidFailed) {
       progressLabel.textContent = '낙찰 실패 - 진행 불가';
-    } else if (isPreparing) {
+    } else if (isAwarded) {
       progressLabel.textContent = '준비 단계 · 편성 확정 대기';
     } else {
       progressLabel.textContent = `입찰 대기 · 예상 ${plannedTurns}턴`;
@@ -5272,7 +5436,7 @@ function renderQuests() {
       runBtn.disabled = true;
       runBtn.classList.add('btn--disabled');
       runBtn.title = '다음 턴에 새 퀘스트로 교체됩니다.';
-    } else if (isPreparing) {
+    } else if (isAwarded) {
       runBtn.textContent = '편성하기';
       runBtn.addEventListener('click', () => openQuestAssignModal(quest.id));
     } else {
@@ -5684,6 +5848,7 @@ function generateMerc() {
     revisitHistory: [],
     isReturning: false
   };
+  assignMercPortrait(merc);
   return merc;
 }
 
@@ -5703,6 +5868,43 @@ function rollGrade() {
  */
 function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function randInt(min, max) {
+  return randomInt(min, max);
+}
+
+function assignMercPortrait(merc) {
+  if (!merc || typeof merc !== 'object') {
+    return merc;
+  }
+  const legacyPattern = /^assets\/mercs\/merc_/;
+  const validPattern = /^assets\/mercs\/m\d{2}\.jpg$/;
+  const fallback = 'assets/mercs/default.jpg';
+  const current = typeof merc.portrait === 'string' ? merc.portrait.trim() : '';
+  if (legacyPattern.test(current)) {
+    merc.portrait = 'assets/mercs/m01.jpg';
+    return merc;
+  }
+  if (validPattern.test(current)) {
+    return merc;
+  }
+  const n = randInt(1, 10);
+  merc.portrait = `assets/mercs/m${String(n).padStart(2, '0')}.jpg`;
+  if (!merc.portrait) {
+    merc.portrait = fallback;
+  }
+  return merc;
+}
+
+function getMercPortraitPath(merc) {
+  if (!merc || typeof merc !== 'object') {
+    return null;
+  }
+  const portrait = typeof merc.portrait === 'string' && merc.portrait.trim().length > 0
+    ? merc.portrait.trim()
+    : 'assets/mercs/default.jpg';
+  return portrait;
 }
 
 function randVar(variance = ECON.variance) {

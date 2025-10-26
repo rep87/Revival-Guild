@@ -2,6 +2,9 @@
 
 ## 프로젝트 개요
 - 다키스트 던전형 경영 로그라이크: 플레이어는 길드를 운영하고, 파티는 자동으로 던전을 탐험합니다.
+- Hiring is immediate (roster & codex update).
+- Formation works only for awarded quests.
+- Portraits use assets/mercs/m01~m10.jpg.
 
 ## 빠른 시작
 - GitHub Pages: [https://rep87.github.io/Revival-Guild/](https://rep87.github.io/Revival-Guild/)
