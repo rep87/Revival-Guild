@@ -29,6 +29,7 @@
         <button id="background-toggle" class="btn btn--ghost">배경 강조</button>
         <button id="recruit-btn" class="btn btn--primary">용병 모집</button>
         <button id="new-turn-btn" class="btn btn--accent">턴 진행</button>
+        <button id="reset-btn" class="btn btn--danger">새 게임</button>
       </div>
     </header>
 
@@ -40,6 +41,7 @@
             <div class="tab-group" id="main-tabs">
               <button class="tab" data-main-tab="mercs">용병</button>
               <button class="tab is-active" data-main-tab="quests">퀘스트</button>
+              <button class="tab" data-main-tab="codex">용병도감</button>
               <button class="tab" data-main-tab="inventory">창고</button>
               <button class="tab" data-main-tab="debug">디버그</button>
             </div>
@@ -58,6 +60,55 @@
               <div id="quest-dashboard" class="quest-dashboard"></div>
               <div id="quest-list" class="quest-list">
                 <div class="empty-state">턴을 진행해 퀘스트를 생성하세요.</div>
+              </div>
+            </div>
+            <div class="tab-panel" data-tab-panel="codex">
+              <div class="tab-panel__header codex-header">
+                <h3>용병 도감</h3>
+                <div class="codex-controls">
+                  <input type="search" id="codex-search" placeholder="이름 검색" aria-label="용병 이름 검색">
+                  <select id="codex-filter-grade" aria-label="등급 필터">
+                    <option value="all">전체 등급</option>
+                    <option value="S">S</option>
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                    <option value="D">D</option>
+                  </select>
+                  <select id="codex-filter-status" aria-label="상태 필터">
+                    <option value="all">전체 상태</option>
+                    <option value="active">현역</option>
+                    <option value="retired">은퇴</option>
+                    <option value="deceased">사망</option>
+                    <option value="left">이탈</option>
+                  </select>
+                </div>
+              </div>
+              <div class="codex-layout">
+                <div class="codex-table-wrapper">
+                  <table class="codex-table" id="codex-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">이름</th>
+                        <th scope="col">등급</th>
+                        <th scope="col">상태</th>
+                        <th scope="col">첫 만남</th>
+                        <th scope="col">최근 본 턴</th>
+                        <th scope="col">완료 퀘스트</th>
+                        <th scope="col">관계</th>
+                        <th scope="col">메모</th>
+                      </tr>
+                    </thead>
+                    <tbody id="codex-table-body">
+                      <tr class="codex-table-empty">
+                        <td colspan="8">도감에 등록된 용병이 없습니다.</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="codex-detail" id="codex-detail" aria-live="polite" aria-label="용병 상세 정보">
+                  <div class="codex-detail__empty">좌측 목록에서 용병을 선택하면 상세 정보가 표시됩니다.</div>
+                </div>
               </div>
             </div>
             <div class="tab-panel" data-tab-panel="inventory">

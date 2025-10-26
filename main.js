@@ -72,6 +72,7 @@ const RARE_SUFFIXES = ['′', '•', 'Ⅱ', 'Ⅲ', 'Ⅳ', 'Ⅴ', 'Ⅵ', 'Ⅶ', '
 const SUPERSCRIPT_DIGITS = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹' };
 
 const STORAGE_KEY = 'rg_v1_save';
+const SAVE_VERSION = 3;
 
 const QUEST_TIER_DISTRIBUTION = [
   { tier: 'S', weight: 0.1 },
@@ -100,6 +101,20 @@ const DEFAULT_RIVALS = [
   { id: 'r3', name: 'Ashen Company', rep: 61 }
 ];
 
+const CODEX_STATUS_LABELS = {
+  active: '현역',
+  retired: '은퇴',
+  deceased: '사망',
+  left: '이탈'
+};
+
+const CODEX_STATUS_ICONS = {
+  active: '●',
+  retired: '🏳',
+  deceased: '✝',
+  left: '↩'
+};
+
 const guildLevel = 1;
 
 let usedNameRegistry = new Set();
@@ -116,7 +131,10 @@ const uiState = {
   activeInventoryTab: 'currency',
   backgroundDimmed: false,
   probabilityPreview: DEBUG_MODE,
-  showDebugConfig: false
+  showDebugConfig: false,
+  codexFilters: { search: '', grade: 'all', status: 'all' },
+  selectedCodexMercId: null,
+  codexChronicleExpanded: {}
 };
 
 /** @type {{start_gold: number, merc_names: string[]}} */
@@ -133,7 +151,8 @@ let state = {
   reputation: 25,
   rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival })),
   inventory: createEmptyInventory(),
-  meta: { usedNames: [] }
+  meta: createDefaultMeta(),
+  codex: createEmptyCodex()
 };
 
 let currentRecruitCandidates = [];
@@ -147,10 +166,34 @@ function createEmptyInventory() {
   return { equip: [], currency: [], consumable: [] };
 }
 
+function createEmptyCodex() {
+  return { mercs: {} };
+}
+
+function createDefaultMeta() {
+  return { usedNames: [], saveVersion: SAVE_VERSION, tutorialSeen: false };
+}
+
+function ensureCodex() {
+  if (!state.codex || typeof state.codex !== 'object') {
+    state.codex = createEmptyCodex();
+  }
+  if (!state.codex.mercs || typeof state.codex.mercs !== 'object') {
+    state.codex.mercs = {};
+  }
+}
+
 function ensureMeta() {
   if (!state.meta || typeof state.meta !== 'object') {
-    state.meta = { usedNames: [] };
+    state.meta = createDefaultMeta();
   }
+  if (!Array.isArray(state.meta.usedNames)) {
+    state.meta.usedNames = [];
+  }
+  if (typeof state.meta.saveVersion !== 'number') {
+    state.meta.saveVersion = 1;
+  }
+  state.meta.tutorialSeen = Boolean(state.meta.tutorialSeen);
 }
 
 function syncUsedNamesToState() {
@@ -177,6 +220,267 @@ function recordUsedName(name) {
   }
   usedNameRegistry.add(name);
   syncUsedNamesToState();
+}
+
+function sanitizeCodexMemo(text) {
+  if (typeof text !== 'string') {
+    return '';
+  }
+  const collapsed = text.replace(/\r?\n+/g, ' ').replace(/\s+/g, ' ').trim();
+  return collapsed.slice(0, 500);
+}
+
+function normalizeCodexStatus(status) {
+  return CODEX_STATUS_LABELS[status] ? status : 'active';
+}
+
+function normalizeCodexEntry(entry, fallbackId) {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+  const id = typeof entry.id === 'string' ? entry.id : fallbackId;
+  if (!id) {
+    return null;
+  }
+  const grade = typeof entry.grade === 'string' ? entry.grade : 'C';
+  const firstMet = entry.firstMet && typeof entry.firstMet === 'object'
+    ? {
+        year: Number.isFinite(entry.firstMet.year) ? entry.firstMet.year : null,
+        month: Number.isFinite(entry.firstMet.month)
+          ? clamp(Math.round(entry.firstMet.month), 1, 12)
+          : null,
+        turn: Number.isFinite(entry.firstMet.turn)
+          ? Math.max(1, Math.round(entry.firstMet.turn))
+          : null
+      }
+    : null;
+  return {
+    id,
+    name: typeof entry.name === 'string' ? entry.name : '미상 용병',
+    grade,
+    firstMet,
+    lastSeenTurn: Math.max(1, Math.round(Number(entry.lastSeenTurn) || 1)),
+    status: normalizeCodexStatus(entry.status),
+    questsCompleted: Math.max(0, Math.round(Number(entry.questsCompleted) || 0)),
+    relationship: clampMood(entry.relationship ?? 0),
+    memo: sanitizeCodexMemo(entry.memo || ''),
+    wage: Math.max(0, Math.round(Number(entry.wage) || 0)),
+    signingBonus: Math.max(0, Math.round(Number(entry.signingBonus) || 0)),
+    level: Number.isFinite(entry.level)
+      ? Math.max(1, Math.round(entry.level))
+      : defaultLevelForGrade(grade),
+    age: Number.isFinite(entry.age) ? Math.max(0, Math.round(entry.age)) : null
+  };
+}
+
+function normalizeCodex(rawCodex) {
+  const normalized = createEmptyCodex();
+  if (!rawCodex || typeof rawCodex !== 'object') {
+    return normalized;
+  }
+  const mercs = rawCodex.mercs && typeof rawCodex.mercs === 'object' ? rawCodex.mercs : {};
+  Object.keys(mercs).forEach((key) => {
+    const entry = normalizeCodexEntry(mercs[key], key);
+    if (entry) {
+      normalized.mercs[entry.id] = entry;
+    }
+  });
+  return normalized;
+}
+
+function ensureCodexEntry(merc) {
+  if (!merc || typeof merc !== 'object' || !merc.id) {
+    return null;
+  }
+  ensureCodex();
+  const existing = state.codex.mercs[merc.id];
+  if (existing) {
+    if (!existing.firstMet) {
+      const date = getCalendarDate();
+      existing.firstMet = {
+        year: date.year,
+        month: date.month,
+        turn: Math.max(1, Number(state.turn) || 1)
+      };
+    }
+    return existing;
+  }
+  const date = getCalendarDate();
+  const firstMet = {
+    year: date.year,
+    month: date.month,
+    turn: Math.max(1, Number(state.turn) || 1)
+  };
+  const seedEntry = normalizeCodexEntry(
+    {
+      id: merc.id,
+      name: merc.name,
+      grade: merc.grade,
+      firstMet,
+      lastSeenTurn: firstMet.turn,
+      status: 'active',
+      questsCompleted: 0,
+      relationship: merc.relationship,
+      memo: '',
+      wage: merc.wage_per_quest,
+      signingBonus: merc.signing_bonus,
+      level: merc.level,
+      age: merc.age
+    },
+    merc.id
+  );
+  state.codex.mercs[merc.id] = seedEntry;
+  return seedEntry;
+}
+
+function updateCodexEntryFromMerc(merc, overrides = {}) {
+  if (!merc || typeof merc !== 'object' || !merc.id) {
+    return false;
+  }
+  const entry = ensureCodexEntry(merc);
+  if (!entry) {
+    return false;
+  }
+  let changed = false;
+
+  const ensureFirstMet = () => {
+    if (!entry.firstMet) {
+      const date = getCalendarDate();
+      entry.firstMet = {
+        year: date.year,
+        month: date.month,
+        turn: Math.max(1, Number(state.turn) || 1)
+      };
+      changed = true;
+    }
+  };
+
+  ensureFirstMet();
+
+  const seenTurnCandidate = overrides.lastSeenTurn != null
+    ? Math.max(1, Math.round(Number(overrides.lastSeenTurn) || 1))
+    : Math.max(entry.lastSeenTurn || 0, Math.max(1, Math.round(Number(state.turn) || 1)));
+  if (seenTurnCandidate > (entry.lastSeenTurn || 0)) {
+    entry.lastSeenTurn = seenTurnCandidate;
+    changed = true;
+  }
+
+  if (typeof merc.name === 'string' && merc.name !== entry.name) {
+    entry.name = merc.name;
+    changed = true;
+  }
+
+  if (typeof merc.grade === 'string' && merc.grade !== entry.grade) {
+    entry.grade = merc.grade;
+    changed = true;
+  }
+
+  const relationshipSource = overrides.relationship != null ? overrides.relationship : merc.relationship;
+  if (relationshipSource != null) {
+    const normalizedRelationship = clampMood(relationshipSource);
+    if (normalizedRelationship !== entry.relationship) {
+      entry.relationship = normalizedRelationship;
+      changed = true;
+    }
+  }
+
+  const wage = Number(merc.wage_per_quest);
+  if (Number.isFinite(wage) && Math.round(wage) !== entry.wage) {
+    entry.wage = Math.round(wage);
+    changed = true;
+  }
+
+  const signingBonus = Number(merc.signing_bonus);
+  if (Number.isFinite(signingBonus) && Math.round(signingBonus) !== entry.signingBonus) {
+    entry.signingBonus = Math.round(signingBonus);
+    changed = true;
+  }
+
+  const level = Number(merc.level);
+  if (Number.isFinite(level)) {
+    const normalizedLevel = Math.max(1, Math.round(level));
+    if (normalizedLevel !== entry.level) {
+      entry.level = normalizedLevel;
+      changed = true;
+    }
+  }
+
+  const age = Number(merc.age);
+  if (Number.isFinite(age)) {
+    const normalizedAge = Math.max(0, Math.round(age));
+    if (normalizedAge !== entry.age) {
+      entry.age = normalizedAge;
+      changed = true;
+    }
+  }
+
+  if ('status' in overrides) {
+    const normalizedStatus = normalizeCodexStatus(overrides.status);
+    if (normalizedStatus !== entry.status) {
+      entry.status = normalizedStatus;
+      changed = true;
+    }
+  }
+
+  if ('questsCompleted' in overrides && overrides.questsCompleted != null) {
+    const value = Math.max(0, Math.round(Number(overrides.questsCompleted) || 0));
+    if (value !== entry.questsCompleted) {
+      entry.questsCompleted = value;
+      changed = true;
+    }
+  }
+
+  if ('questsCompletedIncrement' in overrides) {
+    const increment = Math.max(0, Math.round(Number(overrides.questsCompletedIncrement) || 0));
+    if (increment > 0) {
+      entry.questsCompleted = Math.max(0, Number(entry.questsCompleted) || 0) + increment;
+      changed = true;
+    }
+  }
+
+  if ('memo' in overrides) {
+    const sanitized = sanitizeCodexMemo(overrides.memo);
+    if (sanitized !== entry.memo) {
+      entry.memo = sanitized;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+function syncCodexFromMercRoster() {
+  let changed = false;
+  (Array.isArray(state.mercs) ? state.mercs : []).forEach((merc) => {
+    if (updateCodexEntryFromMerc(merc)) {
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function getCodexEntryById(mercId) {
+  ensureCodex();
+  if (!mercId) {
+    return null;
+  }
+  return state.codex.mercs[mercId] || null;
+}
+
+function getCodexEntries() {
+  ensureCodex();
+  const entries = Object.values(state.codex.mercs || {});
+  entries.sort((a, b) => {
+    const turnA = Number.isFinite(a?.firstMet?.turn) ? a.firstMet.turn : Number.MAX_SAFE_INTEGER;
+    const turnB = Number.isFinite(b?.firstMet?.turn) ? b.firstMet.turn : Number.MAX_SAFE_INTEGER;
+    if (turnA !== turnB) {
+      return turnA - turnB;
+    }
+    const nameA = typeof a.name === 'string' ? a.name : '';
+    const nameB = typeof b.name === 'string' ? b.name : '';
+    return nameA.localeCompare(nameB, 'ko');
+  });
+  return entries;
 }
 
 function toSuperscript(number) {
@@ -317,6 +621,7 @@ const elements = {
   formulaContent: document.getElementById('board-formula-content'),
   formulaBox: document.getElementById('board-formula'),
   backgroundToggle: document.getElementById('background-toggle'),
+  resetBtn: document.getElementById('reset-btn'),
   mainTabs: document.getElementById('main-tabs'),
   mainTabPanels: document.querySelectorAll('[data-tab-panel]'),
   inventoryTabs: document.getElementById('inventory-tabs'),
@@ -330,7 +635,12 @@ const elements = {
   configDump: document.getElementById('config-dump'),
   debugConfigToggle: document.getElementById('debug-config-toggle'),
   debugSaveBtn: document.getElementById('debug-save-btn'),
-  debugLoadBtn: document.getElementById('debug-load-btn')
+  debugLoadBtn: document.getElementById('debug-load-btn'),
+  codexSearch: document.getElementById('codex-search'),
+  codexGradeFilter: document.getElementById('codex-filter-grade'),
+  codexStatusFilter: document.getElementById('codex-filter-status'),
+  codexTableBody: document.getElementById('codex-table-body'),
+  codexDetail: document.getElementById('codex-detail')
 };
 
 /**
@@ -376,6 +686,9 @@ function bindEvents() {
   if (elements.backgroundToggle) {
     elements.backgroundToggle.addEventListener('click', toggleBackgroundEmphasis);
   }
+  if (elements.resetBtn) {
+    elements.resetBtn.addEventListener('click', openResetModal);
+  }
   if (elements.probabilityToggle) {
     elements.probabilityToggle.addEventListener('click', toggleProbabilityPreview);
   }
@@ -387,6 +700,15 @@ function bindEvents() {
   }
   if (elements.debugLoadBtn) {
     elements.debugLoadBtn.addEventListener('click', handleManualLoad);
+  }
+  if (elements.codexSearch) {
+    elements.codexSearch.addEventListener('input', handleCodexSearchInput);
+  }
+  if (elements.codexGradeFilter) {
+    elements.codexGradeFilter.addEventListener('change', handleCodexFilterChange);
+  }
+  if (elements.codexStatusFilter) {
+    elements.codexStatusFilter.addEventListener('change', handleCodexFilterChange);
   }
   bindTabNavigation();
   elements.modalOverlay.addEventListener('click', (event) => {
@@ -534,6 +856,76 @@ async function handleManualLoad() {
   await refreshAssetChecklist();
   log(`[T${state.turn}] 디버그: 저장 데이터를 불러왔습니다.`);
   renderDebugPanel();
+}
+
+function resetCodexUIState() {
+  uiState.codexFilters = { search: '', grade: 'all', status: 'all' };
+  uiState.selectedCodexMercId = null;
+  uiState.codexChronicleExpanded = {};
+  if (elements.codexSearch) {
+    elements.codexSearch.value = '';
+  }
+  if (elements.codexGradeFilter) {
+    elements.codexGradeFilter.value = 'all';
+  }
+  if (elements.codexStatusFilter) {
+    elements.codexStatusFilter.value = 'all';
+  }
+}
+
+function openResetModal() {
+  resetModalRequirementSummary();
+  if (!elements.modalTitle || !elements.modalBody) {
+    return;
+  }
+  elements.modalTitle.textContent = '새 게임 시작';
+  elements.modalBody.innerHTML = '';
+
+  const message = document.createElement('p');
+  message.className = 'modal-description';
+  message.textContent = '저장된 진행 상황을 모두 삭제하고 새 게임을 시작하시겠습니까?';
+  elements.modalBody.appendChild(message);
+
+  const warning = document.createElement('p');
+  warning.className = 'modal-highlight';
+  warning.textContent = '확인을 누르면 현재 저장 데이터가 삭제됩니다.';
+  elements.modalBody.appendChild(warning);
+
+  const actions = document.createElement('div');
+  actions.className = 'modal__actions';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn btn--primary';
+  cancelBtn.textContent = '취소';
+  cancelBtn.addEventListener('click', closeModal);
+
+  const confirmBtn = document.createElement('button');
+  confirmBtn.className = 'btn btn--danger';
+  confirmBtn.textContent = '새 게임 시작';
+  confirmBtn.addEventListener('click', performNewGameReset);
+
+  actions.append(cancelBtn, confirmBtn);
+  elements.modalBody.appendChild(actions);
+
+  openModal();
+}
+
+function performNewGameReset() {
+  localStorage.removeItem(STORAGE_KEY);
+  closeModal();
+  resetCodexUIState();
+  clearAllTempSelections();
+  currentRecruitCandidates = [];
+  uiState.activeMainTab = 'quests';
+  uiState.activeInventoryTab = 'currency';
+  uiState.backgroundDimmed = false;
+  updatePanelDimming();
+  load();
+  switchMainTab('quests');
+  switchInventoryTab('currency');
+  render();
+  refreshAssetChecklist();
+  log(`[T${state.turn}] 새 게임을 시작했습니다. 첫 퀘스트를 탐색해 보세요.`);
 }
 
 function updatePanelDimming() {
@@ -692,6 +1084,12 @@ function clearTempQuestDraft(questId) {
   delete tempSelections[questId];
 }
 
+function clearAllTempSelections() {
+  Object.keys(tempSelections).forEach((key) => {
+    delete tempSelections[key];
+  });
+}
+
 function randomChoice(list) {
   if (!Array.isArray(list) || list.length === 0) {
     return null;
@@ -848,6 +1246,7 @@ function updateMercMoodStates(activeAssignments) {
         moodLogs.push(renderTemplate(template, context));
       }
     }
+    updateCodexEntryFromMerc(merc, { lastSeenTurn: state.turn, relationship: merc.relationship });
   });
 
   return moodLogs;
@@ -878,12 +1277,21 @@ function appendMercJournalEntry(merc, text) {
 function load() {
   const stored = localStorage.getItem(STORAGE_KEY);
   let loadedFromStorage = false;
+  let needsResave = false;
   if (stored) {
     try {
       const parsed = JSON.parse(stored);
       const normalizedRivals = Array.isArray(parsed.rivals)
         ? normalizeRivals(parsed.rivals)
         : DEFAULT_RIVALS.map((rival) => ({ ...rival }));
+      const parsedMeta = parsed.meta && typeof parsed.meta === 'object' ? parsed.meta : {};
+      const meta = {
+        usedNames: Array.isArray(parsedMeta.usedNames)
+          ? parsedMeta.usedNames.filter((name) => typeof name === 'string')
+          : [],
+        tutorialSeen: Boolean(parsedMeta.tutorialSeen),
+        saveVersion: Number.isFinite(parsedMeta.saveVersion) ? parsedMeta.saveVersion : 1
+      };
       state = {
         gold: Math.max(0, Number(parsed.gold) || CONFIG.START_GOLD),
         turn: Math.max(1, Number(parsed.turn) || 1),
@@ -896,11 +1304,8 @@ function load() {
         reputation: clampRep(Number(parsed.reputation), 25),
         rivals: normalizedRivals,
         inventory: normalizeInventory(parsed.inventory),
-        meta: {
-          usedNames: Array.isArray(parsed.meta?.usedNames)
-            ? parsed.meta.usedNames.filter((name) => typeof name === 'string')
-            : []
-        }
+        meta,
+        codex: normalizeCodex(parsed.codex)
       };
       loadedFromStorage = true;
     } catch (error) {
@@ -919,17 +1324,36 @@ function load() {
       reputation: 25,
       rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival })),
       inventory: createEmptyInventory(),
-      meta: { usedNames: [] }
+      meta: createDefaultMeta(),
+      codex: createEmptyCodex()
     };
+    needsResave = true;
   }
 
+  ensureMeta();
+  ensureCodex();
+  const previousVersion = Number.isFinite(state.meta.saveVersion) ? state.meta.saveVersion : 1;
+  if (previousVersion !== SAVE_VERSION) {
+    state.meta.saveVersion = SAVE_VERSION;
+    needsResave = true;
+  }
+  state.meta.tutorialSeen = Boolean(state.meta.tutorialSeen);
+
   initializeUsedNames();
+  if (syncCodexFromMercRoster()) {
+    needsResave = true;
+  }
   ensureQuestSlots();
   if (!loadedFromStorage) {
     spawnQuestsForEmptySlots(true);
-    save();
   }
   syncMercBusyFromQuests();
+  if (!loadedFromStorage) {
+    needsResave = true;
+  }
+  if (needsResave) {
+    save();
+  }
 }
 
 /**
@@ -937,6 +1361,10 @@ function load() {
  */
 function save() {
   syncUsedNamesToState();
+  ensureMeta();
+  ensureCodex();
+  state.meta.saveVersion = SAVE_VERSION;
+  state.meta.tutorialSeen = Boolean(state.meta.tutorialSeen);
   const toSave = {
     gold: state.gold,
     turn: state.turn,
@@ -947,7 +1375,8 @@ function save() {
     reputation: state.reputation,
     rivals: state.rivals,
     inventory: state.inventory,
-    meta: state.meta
+    meta: state.meta,
+    codex: state.codex
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
 }
@@ -1508,6 +1937,11 @@ function finalizeQuest(quest) {
   assignedMercs.forEach((merc) => {
     merc.busy = false;
     appendMercJournalEntry(merc, `${questTitle} · ${returnTale}`);
+    updateCodexEntryFromMerc(merc, {
+      lastSeenTurn: state.turn,
+      questsCompletedIncrement: 1,
+      relationship: merc.relationship
+    });
   });
 
   return {
@@ -1638,7 +2072,7 @@ function normalizeMerc(merc) {
         .filter((entry) => entry && entry.trim().length > 0)
         .slice(-8)
     : [];
-  return {
+  const normalized = {
     ...merc,
     name,
     grade,
@@ -1650,6 +2084,9 @@ function normalizeMerc(merc) {
     benched,
     journal
   };
+  const lastSeen = Number.isFinite(merc.lastSeenTurn) ? Math.max(1, Math.round(merc.lastSeenTurn)) : state.turn;
+  updateCodexEntryFromMerc(normalized, { lastSeenTurn: lastSeen });
+  return normalized;
 }
 
 /** Normalize a quest object loaded from storage. */
@@ -1939,6 +2376,7 @@ function hireMerc(mercId) {
   const hiredMerc = { ...candidate };
   delete hiredMerc.hired;
   state.mercs.push(hiredMerc);
+  updateCodexEntryFromMerc(hiredMerc, { lastSeenTurn: state.turn });
   log(`[T${state.turn}] ${candidate.name} [${candidate.grade}] 용병을 고용했습니다. 계약금 ${candidate.signing_bonus}G 지급.`);
   save();
   render();
@@ -2760,6 +3198,7 @@ function render() {
   renderMercs();
   renderQuestDashboard();
   renderQuests();
+  renderCodex();
   renderInventory();
   renderLogs();
   renderDebugPanel();
@@ -2838,6 +3277,391 @@ function renderMercs() {
     card.addEventListener('click', () => openMercDetails(merc.id));
     elements.mercList.appendChild(card);
   });
+}
+
+function renderCodex() {
+  if (!elements.codexTableBody || !elements.codexDetail) {
+    return;
+  }
+  ensureCodex();
+  const filters = uiState.codexFilters || { search: '', grade: 'all', status: 'all' };
+  const searchTerm = (filters.search || '').trim().toLowerCase();
+  const gradeFilter = filters.grade || 'all';
+  const statusFilter = filters.status || 'all';
+
+  if (elements.codexSearch && elements.codexSearch.value !== filters.search) {
+    elements.codexSearch.value = filters.search;
+  }
+  if (elements.codexGradeFilter && elements.codexGradeFilter.value !== gradeFilter) {
+    elements.codexGradeFilter.value = gradeFilter;
+  }
+  if (elements.codexStatusFilter && elements.codexStatusFilter.value !== statusFilter) {
+    elements.codexStatusFilter.value = statusFilter;
+  }
+
+  const filtered = getCodexEntries().filter((entry) => {
+    const matchesSearch = !searchTerm
+      || (typeof entry.name === 'string' && entry.name.toLowerCase().includes(searchTerm));
+    const matchesGrade = gradeFilter === 'all' || entry.grade === gradeFilter;
+    const matchesStatus = statusFilter === 'all' || normalizeCodexStatus(entry.status) === statusFilter;
+    return matchesSearch && matchesGrade && matchesStatus;
+  });
+
+  elements.codexTableBody.innerHTML = '';
+  if (filtered.length === 0) {
+    const row = document.createElement('tr');
+    row.className = 'codex-table-empty';
+    const cell = document.createElement('td');
+    cell.colSpan = 8;
+    cell.textContent = searchTerm
+      ? '검색 조건에 맞는 용병이 없습니다.'
+      : '도감에 등록된 용병이 없습니다.';
+    row.appendChild(cell);
+    elements.codexTableBody.appendChild(row);
+    uiState.selectedCodexMercId = null;
+    renderCodexDetail(null);
+    return;
+  }
+
+  filtered.forEach((entry) => {
+    const row = document.createElement('tr');
+    row.dataset.mercId = entry.id;
+
+    const nameCell = document.createElement('td');
+    nameCell.textContent = entry.name || '미상 용병';
+    row.appendChild(nameCell);
+
+    const gradeCell = document.createElement('td');
+    gradeCell.textContent = entry.grade || '-';
+    row.appendChild(gradeCell);
+
+    const statusCell = document.createElement('td');
+    statusCell.appendChild(createCodexStatusChip(entry.status));
+    row.appendChild(statusCell);
+
+    const firstMetCell = document.createElement('td');
+    firstMetCell.textContent = formatFirstMet(entry.firstMet);
+    row.appendChild(firstMetCell);
+
+    const lastSeenCell = document.createElement('td');
+    lastSeenCell.textContent = formatLastSeenTurn(entry.lastSeenTurn);
+    row.appendChild(lastSeenCell);
+
+    const questCell = document.createElement('td');
+    questCell.textContent = `${Math.max(0, Number(entry.questsCompleted) || 0)}`;
+    row.appendChild(questCell);
+
+    const relationshipCell = document.createElement('td');
+    relationshipCell.className = 'codex-relationship';
+    relationshipCell.textContent = formatCodexRelationship(entry.relationship);
+    row.appendChild(relationshipCell);
+
+    const memoCell = document.createElement('td');
+    memoCell.className = 'codex-table__memo';
+    memoCell.textContent = formatCodexMemoSummary(entry.memo);
+    row.appendChild(memoCell);
+
+    row.addEventListener('click', () => {
+      uiState.selectedCodexMercId = entry.id;
+      uiState.codexChronicleExpanded = uiState.codexChronicleExpanded || {};
+      renderCodexDetail(entry.id);
+      updateCodexRowSelection();
+    });
+
+    elements.codexTableBody.appendChild(row);
+  });
+
+  if (!uiState.selectedCodexMercId || !filtered.some((entry) => entry.id === uiState.selectedCodexMercId)) {
+    uiState.selectedCodexMercId = filtered[0].id;
+  }
+
+  renderCodexDetail(uiState.selectedCodexMercId);
+  updateCodexRowSelection();
+}
+
+function updateCodexRowSelection() {
+  if (!elements.codexTableBody) {
+    return;
+  }
+  const rows = elements.codexTableBody.querySelectorAll('tr[data-merc-id]');
+  rows.forEach((row) => {
+    row.classList.toggle('is-selected', row.dataset.mercId === uiState.selectedCodexMercId);
+  });
+}
+
+function renderCodexDetail(mercId) {
+  if (!elements.codexDetail) {
+    return;
+  }
+  const container = elements.codexDetail;
+  container.innerHTML = '';
+
+  if (!mercId) {
+    const empty = document.createElement('div');
+    empty.className = 'codex-detail__empty';
+    empty.textContent = '도감에 등록된 용병이 없습니다.';
+    container.appendChild(empty);
+    return;
+  }
+
+  const entry = getCodexEntryById(mercId);
+  if (!entry) {
+    const missing = document.createElement('div');
+    missing.className = 'codex-detail__empty';
+    missing.textContent = '선택한 용병 정보를 불러올 수 없습니다.';
+    container.appendChild(missing);
+    return;
+  }
+
+  const header = document.createElement('div');
+  header.className = 'codex-detail__header';
+  const title = document.createElement('h4');
+  title.className = 'codex-detail__title';
+  title.textContent = entry.name || '미상 용병';
+  header.appendChild(title);
+
+  const metaLine = document.createElement('div');
+  metaLine.className = 'codex-grade';
+  const gradeLabel = document.createElement('span');
+  gradeLabel.textContent = `등급 ${entry.grade || '-'}`;
+  metaLine.appendChild(gradeLabel);
+  metaLine.appendChild(createCodexStatusChip(entry.status));
+  header.appendChild(metaLine);
+
+  container.appendChild(header);
+
+  const summarySection = document.createElement('div');
+  summarySection.className = 'codex-detail__section';
+  const summaryTitle = document.createElement('h4');
+  summaryTitle.className = 'codex-detail__section-title';
+  summaryTitle.textContent = '기본 정보';
+  summarySection.appendChild(summaryTitle);
+
+  const summaryList = document.createElement('dl');
+  summaryList.className = 'codex-summary';
+  addCodexSummaryRow(summaryList, '임금', entry.wage > 0 ? `${entry.wage}G / 퀘스트` : '미상');
+  addCodexSummaryRow(summaryList, '계약금', entry.signingBonus > 0 ? `${entry.signingBonus}G` : '미상');
+  addCodexSummaryRow(summaryList, '레벨', Number.isFinite(entry.level) ? `Lv.${entry.level}` : '미상');
+  addCodexSummaryRow(summaryList, '나이', Number.isFinite(entry.age) ? `${entry.age}세` : '미상');
+  addCodexSummaryRow(summaryList, '관계', formatCodexRelationship(entry.relationship), true);
+  addCodexSummaryRow(summaryList, '첫 만남', formatFirstMet(entry.firstMet));
+  addCodexSummaryRow(summaryList, '최근 본 턴', formatLastSeenTurn(entry.lastSeenTurn));
+  addCodexSummaryRow(summaryList, '완료 퀘스트', `${Math.max(0, Number(entry.questsCompleted) || 0)}`);
+  summarySection.appendChild(summaryList);
+  container.appendChild(summarySection);
+
+  const chronicleSection = document.createElement('div');
+  chronicleSection.className = 'codex-detail__section';
+  const chronicleTitle = document.createElement('h4');
+  chronicleTitle.className = 'codex-detail__section-title';
+  chronicleTitle.textContent = '연대기';
+  chronicleSection.appendChild(chronicleTitle);
+
+  const expanded = Boolean(uiState.codexChronicleExpanded?.[entry.id]);
+  const rawChronicle = buildCodexChronicleEntries(entry, expanded ? 40 : 11);
+  const chronicleEntries = expanded ? rawChronicle : rawChronicle.slice(0, 10);
+  const hasMore = !expanded && rawChronicle.length > 10;
+
+  if (chronicleEntries.length === 0) {
+    const emptyChronicle = document.createElement('div');
+    emptyChronicle.className = 'codex-chronicle__empty';
+    emptyChronicle.textContent = '기록된 활동이 없습니다.';
+    chronicleSection.appendChild(emptyChronicle);
+  } else {
+    const list = document.createElement('div');
+    list.className = 'codex-chronicle';
+    chronicleEntries.forEach((entryItem) => {
+      const item = document.createElement('div');
+      item.className = 'codex-chronicle__item';
+      const turnLabel = Number.isFinite(entryItem.turn) ? `T${entryItem.turn} · ` : '';
+      item.textContent = `${turnLabel}${entryItem.text || '기록 없음'}`;
+      list.appendChild(item);
+    });
+    chronicleSection.appendChild(list);
+  }
+
+  if (hasMore || expanded) {
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'codex-chronicle__toggle';
+    toggle.textContent = expanded ? '접기' : '더보기';
+    toggle.addEventListener('click', () => {
+      uiState.codexChronicleExpanded = uiState.codexChronicleExpanded || {};
+      uiState.codexChronicleExpanded[entry.id] = !expanded;
+      renderCodexDetail(entry.id);
+    });
+    chronicleSection.appendChild(toggle);
+  }
+
+  container.appendChild(chronicleSection);
+
+  const memoSection = document.createElement('div');
+  memoSection.className = 'codex-detail__section codex-memo';
+  const memoTitle = document.createElement('h4');
+  memoTitle.className = 'codex-detail__section-title';
+  memoTitle.textContent = '플레이어 메모';
+  memoSection.appendChild(memoTitle);
+
+  const memoInput = document.createElement('textarea');
+  memoInput.maxLength = 500;
+  memoInput.dataset.mercId = entry.id;
+  memoInput.value = entry.memo || '';
+  memoInput.placeholder = '줄바꿈 없이 500자까지 작성할 수 있습니다.';
+  memoInput.addEventListener('input', handleCodexMemoInput);
+  memoInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+    }
+  });
+  memoSection.appendChild(memoInput);
+
+  const memoHint = document.createElement('p');
+  memoHint.className = 'codex-memo__hint';
+  memoHint.textContent = '입력 즉시 저장됩니다. 줄바꿈은 지원하지 않습니다.';
+  memoSection.appendChild(memoHint);
+
+  container.appendChild(memoSection);
+}
+
+function createCodexStatusChip(status) {
+  const normalized = normalizeCodexStatus(status);
+  const chip = document.createElement('span');
+  chip.className = `codex-status codex-status--${normalized}`;
+  const icon = document.createElement('span');
+  icon.className = 'codex-status__icon';
+  icon.textContent = getCodexStatusIcon(normalized);
+  const label = document.createElement('span');
+  label.textContent = formatCodexStatus(normalized);
+  chip.append(icon, label);
+  return chip;
+}
+
+function addCodexSummaryRow(list, label, value, isRelationship = false) {
+  const dt = document.createElement('dt');
+  dt.textContent = label;
+  const dd = document.createElement('dd');
+  if (isRelationship) {
+    dd.className = 'codex-relationship';
+  }
+  dd.textContent = value;
+  list.append(dt, dd);
+}
+
+function formatFirstMet(firstMet) {
+  if (!firstMet || (firstMet.year == null && firstMet.turn == null)) {
+    return '미상';
+  }
+  const yearPart = Number.isFinite(firstMet.year) ? `${firstMet.year}` : '??';
+  const monthPart = Number.isFinite(firstMet.month)
+    ? String(firstMet.month).padStart(2, '0')
+    : '??';
+  const turnPart = Number.isFinite(firstMet.turn) ? `T${firstMet.turn}` : 'T?';
+  if (yearPart === '??' && monthPart === '??') {
+    return turnPart;
+  }
+  return `${yearPart}.${monthPart} / ${turnPart}`;
+}
+
+function formatLastSeenTurn(turn) {
+  return Number.isFinite(turn) ? `T${turn}` : '미상';
+}
+
+function formatCodexStatus(status) {
+  const normalized = normalizeCodexStatus(status);
+  return CODEX_STATUS_LABELS[normalized] || CODEX_STATUS_LABELS.active;
+}
+
+function getCodexStatusIcon(status) {
+  const normalized = normalizeCodexStatus(status);
+  return CODEX_STATUS_ICONS[normalized] || CODEX_STATUS_ICONS.active;
+}
+
+function formatCodexRelationship(value) {
+  const numeric = clampMood(value);
+  return `🤝 ${numeric}`;
+}
+
+function formatCodexMemoSummary(memo) {
+  const text = sanitizeCodexMemo(memo || '');
+  if (!text) {
+    return '-';
+  }
+  return text.length > 42 ? `${text.slice(0, 42)}…` : text;
+}
+
+function buildCodexChronicleEntries(entry, limit = 10) {
+  if (!entry) {
+    return [];
+  }
+  const liveMerc = state.mercs.find((merc) => merc.id === entry.id);
+  if (liveMerc) {
+    return buildMercChronicle(liveMerc, limit);
+  }
+  const logs = Array.isArray(state.log) ? state.log.slice().reverse() : [];
+  const results = [];
+  logs.forEach((logEntry) => {
+    if (results.length >= limit) {
+      return;
+    }
+    const parsed = parseLogLine(logEntry);
+    if (!parsed.text) {
+      return;
+    }
+    if (parsed.text.includes(entry.name) || parsed.text.includes(entry.id)) {
+      results.push(parsed);
+    }
+  });
+  return results;
+}
+
+function handleCodexMemoInput(event) {
+  const textarea = event.target;
+  if (!textarea || !textarea.dataset.mercId) {
+    return;
+  }
+  const mercId = textarea.dataset.mercId;
+  const sanitized = sanitizeCodexMemo(textarea.value);
+  if (sanitized !== textarea.value) {
+    textarea.value = sanitized;
+  }
+  const entry = getCodexEntryById(mercId);
+  if (!entry) {
+    return;
+  }
+  if (entry.memo === sanitized) {
+    return;
+  }
+  entry.memo = sanitized;
+  save();
+  if (elements.codexTableBody) {
+    const row = elements.codexTableBody.querySelector(`tr[data-merc-id="${mercId}"]`);
+    if (row) {
+      const memoCell = row.querySelector('td.codex-table__memo');
+      if (memoCell) {
+        memoCell.textContent = formatCodexMemoSummary(entry.memo);
+      }
+    }
+  }
+}
+
+function handleCodexSearchInput(event) {
+  const value = typeof event?.target?.value === 'string' ? event.target.value : '';
+  uiState.codexFilters = uiState.codexFilters || { search: '', grade: 'all', status: 'all' };
+  uiState.codexFilters.search = value;
+  uiState.codexChronicleExpanded = {};
+  renderCodex();
+}
+
+function handleCodexFilterChange() {
+  uiState.codexFilters = uiState.codexFilters || { search: '', grade: 'all', status: 'all' };
+  if (elements.codexGradeFilter) {
+    uiState.codexFilters.grade = elements.codexGradeFilter.value || 'all';
+  }
+  if (elements.codexStatusFilter) {
+    uiState.codexFilters.status = elements.codexStatusFilter.value || 'all';
+  }
+  uiState.codexChronicleExpanded = {};
+  renderCodex();
 }
 
 function createMoodBadge(icon, value, label) {
@@ -3009,13 +3833,13 @@ function createStatCard(label, value) {
   return card;
 }
 
-function buildMercChronicle(merc) {
+function buildMercChronicle(merc, limit = 10) {
   const entries = [];
   const displayName = getMercDisplayName(merc);
   const baseName = merc.name;
   const logs = Array.isArray(state.log) ? state.log.slice().reverse() : [];
   logs.forEach((entry) => {
-    if (entries.length >= 10) {
+    if (entries.length >= limit) {
       return;
     }
     const parsed = parseLogLine(entry);
@@ -3029,7 +3853,7 @@ function buildMercChronicle(merc) {
 
   const personalNotes = Array.isArray(merc.journal) ? merc.journal.slice().reverse() : [];
   personalNotes.forEach((note, index) => {
-    if (entries.length >= 10) {
+    if (entries.length >= limit) {
       return;
     }
     const parsed = parseJournalEntry(note, state.turn, index);
@@ -3050,7 +3874,7 @@ function buildMercChronicle(merc) {
       return;
     }
     journal.forEach((note, index) => {
-      if (entries.length >= 10) {
+      if (entries.length >= limit) {
         return;
       }
       const parsed = parseJournalEntry(note, quest.started_turn, index);
@@ -3077,7 +3901,7 @@ function buildMercChronicle(merc) {
     return turnB - turnA;
   });
 
-  return unique.slice(0, 10);
+  return unique.slice(0, limit);
 }
 
 function parseLogLine(entry) {
@@ -3737,7 +4561,7 @@ function generateMerc() {
   const level = clamp(baseLevel + randomInt(-1, 2), 1, baseLevel + 4);
   const age = clamp(randomInt(19, 36) + randomInt(0, 4), 18, 48);
 
-  return {
+  const merc = {
     id: `merc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     name,
     grade,
@@ -3754,6 +4578,8 @@ function generateMerc() {
     benched: randomInt(10, 25),
     journal: []
   };
+  updateCodexEntryFromMerc(merc, { lastSeenTurn: Math.max(1, Number(state.turn) || 1) });
+  return merc;
 }
 
 /**
@@ -3810,6 +4636,7 @@ function formatSpawnRate() {
  * @property {?number} lastRecruitTurn
  * @property {number} reputation
  * @property {Rival[]} rivals
+ * @property {{mercs: {[key: string]: CodexEntry}}} codex
  *
  * @typedef {Object} Merc
  * @property {string} id
@@ -3859,4 +4686,19 @@ function formatSpawnRate() {
  * @property {boolean} campPlaced
  *
  * @typedef {{id: string, name: string, rep: number}} Rival
+ *
+ * @typedef {Object} CodexEntry
+ * @property {string} id
+ * @property {string} name
+ * @property {'S'|'A'|'B'|'C'|'D'} grade
+ * @property {{year: number|null, month: number|null, turn: number|null}|null} firstMet
+ * @property {number} lastSeenTurn
+ * @property {'active'|'retired'|'deceased'|'left'} status
+ * @property {number} questsCompleted
+ * @property {number} relationship
+ * @property {string} memo
+ * @property {number} wage
+ * @property {number} signingBonus
+ * @property {number} level
+ * @property {?number} age
  */
