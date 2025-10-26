@@ -5,6 +5,18 @@
 
 const DEBUG_MODE = typeof window !== 'undefined' && window.location.search.includes('debug=1');
 
+const REPUTATION = {
+  MIN: 0,
+  MAX: 1000,
+  bands: [
+    { key: 'low', name: '알려지지 않음', range: [0, 199] },
+    { key: 'mid1', name: '지역에 알려짐', range: [200, 499] },
+    { key: 'mid2', name: '국가에 알려짐', range: [500, 799] },
+    { key: 'high', name: '대륙에 알려짐', range: [800, 899] },
+    { key: 'top', name: '전세계에 알려짐', range: [900, 1000] }
+  ]
+};
+
 const CONFIG = {
   START_GOLD: 500,
   START_YEAR: 21,
@@ -19,9 +31,9 @@ const CONFIG = {
   QUEST_SLOTS: 3,
   QUEST_VISIBLE_TURNS_MIN: 1,
   QUEST_VISIBLE_TURNS_MAX: 4,
-  QUEST_REWARD_MIN: 50,
-  QUEST_REWARD_MAX: 200,
-  QUEST_TURNS_MIN: 5,
+  QUEST_REWARD_MIN: 20,
+  QUEST_REWARD_MAX: 1000,
+  QUEST_TURNS_MIN: 3,
   QUEST_TURNS_MAX: 12,
   RECRUIT_ONCE_PER_TURN: true,
   ASSET_BG: 'assets/bg/medieval.jpg',
@@ -52,18 +64,47 @@ const CONFIG = {
     reputation: { bid: 0.2, stats: 0.35, rep: 0.45 },
     stats: { bid: 0.25, stats: 0.55, rep: 0.2 }
   },
-  REP_MIN: 0,
-  REP_MAX: 100
+  START_REPUTATION: 250,
+  REP_MIN: REPUTATION.MIN,
+  REP_MAX: REPUTATION.MAX
+};
+
+const SPAWN_TABLE = {
+  quests: {
+    low: [0.0, 0.02, 0.18, 0.55, 0.25],
+    mid1: [0.02, 0.1, 0.3, 0.45, 0.13],
+    mid2: [0.05, 0.18, 0.38, 0.34, 0.05],
+    high: [0.09, 0.22, 0.4, 0.26, 0.03],
+    top: [0.16, 0.28, 0.38, 0.16, 0.02]
+  },
+  mercs: {
+    low: [0.0, 0.01, 0.1, 0.39, 0.5],
+    mid1: [0.01, 0.06, 0.22, 0.46, 0.25],
+    mid2: [0.03, 0.12, 0.33, 0.41, 0.11],
+    high: [0.06, 0.18, 0.38, 0.33, 0.05],
+    top: [0.1, 0.24, 0.4, 0.23, 0.03]
+  }
+};
+
+const ECON = {
+  wageCoefPerPoint: 2.0,
+  signingCoefPerPoint: 6.0,
+  baseReward: 40,
+  tierCoef: { S: 1.8, A: 1.4, B: 1.1, C: 0.8, D: 0.5 },
+  turnCoef: (t) => 0.75 + 0.12 * t,
+  variance: 0.1
 };
 
 const QUEST_CONFIG = {
-  spawnRate: 0.6,
-  rewardMultiplier: {
-    S: 1.85,
-    A: 1.4,
-    B: 1.1,
-    C: 0.85
-  }
+  spawnRate: 0.6
+};
+
+const QUEST_TURN_RANGES = {
+  S: [8, 12],
+  A: [7, 10],
+  B: [6, 8],
+  C: [4, 6],
+  D: [3, 5]
 };
 
 const FIRST_NAMES = ['Egon', 'Lira', 'Bran', 'Kara', 'Sven', 'Toma', 'Nia', 'Roth', 'Elda', 'Finn', 'Mara', 'Ivo', 'Cael', 'Rina', 'Dane'];
@@ -72,34 +113,31 @@ const RARE_SUFFIXES = ['′', '•', 'Ⅱ', 'Ⅲ', 'Ⅳ', 'Ⅴ', 'Ⅵ', 'Ⅶ', '
 const SUPERSCRIPT_DIGITS = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹' };
 
 const STORAGE_KEY = 'rg_v1_save';
-const SAVE_VERSION = 3;
-
-const QUEST_TIER_DISTRIBUTION = [
-  { tier: 'S', weight: 0.1 },
-  { tier: 'A', weight: 0.25 },
-  { tier: 'B', weight: 0.35 },
-  { tier: 'C', weight: 0.3 }
-];
+const SAVE_VERSION = 4;
 
 const QUEST_IMPORTANCE_BY_TIER = {
   S: ['reputation', 'stats'],
   A: ['stats', 'reputation', 'gold'],
   B: ['gold', 'stats', 'reputation'],
-  C: ['gold', 'gold', 'stats']
+  C: ['gold', 'gold', 'stats'],
+  D: ['gold', 'stats', 'gold']
 };
 
 const REPUTATION_REWARD_BY_TIER = {
-  S: 6,
-  A: 4,
-  B: 3,
-  C: 2
+  S: 12,
+  A: 8,
+  B: 5,
+  C: 3,
+  D: 2
 };
 
 const DEFAULT_RIVALS = [
-  { id: 'r1', name: 'Iron Fang', rep: 52 },
-  { id: 'r2', name: 'Moonlight', rep: 47 },
-  { id: 'r3', name: 'Ashen Company', rep: 61 }
+  { id: 'r1', name: 'Iron Fang', rep: 520 },
+  { id: 'r2', name: 'Moonlight', rep: 470 },
+  { id: 'r3', name: 'Ashen Company', rep: 610 }
 ];
+
+const GRADE_ORDER = ['S', 'A', 'B', 'C', 'D'];
 
 const NAMED_RATE = 0.1;
 const TOWNIE_RATE = 0.05;
@@ -145,7 +183,8 @@ const uiState = {
   showDebugConfig: false,
   codexFilters: { search: '', grade: 'all', status: 'all' },
   selectedCodexMercId: null,
-  codexChronicleExpanded: {}
+  codexChronicleExpanded: {},
+  probabilityBand: 'current'
 };
 
 /** @type {{start_gold: number, merc_names: string[]}} */
@@ -159,7 +198,7 @@ let state = {
   quests: [],
   log: [],
   lastRecruitTurn: null,
-  reputation: 25,
+  reputation: CONFIG.START_REPUTATION,
   rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival })),
   inventory: createEmptyInventory(),
   meta: createDefaultMeta(),
@@ -449,7 +488,7 @@ function normalizeCodex(rawCodex) {
   return normalized;
 }
 
-function normalizePool(rawPool) {
+function normalizePool(rawPool, options = {}) {
   const normalized = createDefaultPools();
   if (!rawPool || typeof rawPool !== 'object') {
     return normalized;
@@ -458,7 +497,10 @@ function normalizePool(rawPool) {
   if (archive && typeof archive === 'object') {
     Object.keys(archive).forEach((key) => {
       const rawEntry = archive[key];
-      const normalizedMerc = normalizeMerc(rawEntry, { skipCodexUpdate: true });
+      const normalizedMerc = normalizeMerc(rawEntry, {
+        skipCodexUpdate: true,
+        saveVersion: options.saveVersion ?? SAVE_VERSION
+      });
       if (normalizedMerc && normalizedMerc.id) {
         const cooldownUntilTurn = Number.isFinite(rawEntry?.cooldownUntilTurn)
           ? Math.max(0, Math.round(rawEntry.cooldownUntilTurn))
@@ -897,6 +939,9 @@ const elements = {
   questList: document.getElementById('quest-list'),
   logList: document.getElementById('log-list'),
   reputationValue: document.getElementById('reputation-value'),
+  reputationBand: document.getElementById('reputation-band'),
+  reputationIncrease: document.getElementById('reputation-increase'),
+  reputationDecrease: document.getElementById('reputation-decrease'),
   assetList: document.getElementById('missing-assets-list'),
   assetNote: document.getElementById('asset-note'),
   recruitBtn: document.getElementById('recruit-btn'),
@@ -924,6 +969,14 @@ const elements = {
   inventoryConsumableList: document.getElementById('inventory-consumable'),
   questDashboard: document.getElementById('quest-dashboard'),
   probabilityToggle: document.getElementById('probability-preview-toggle'),
+  probabilityPanel: document.getElementById('probability-panel'),
+  probabilityQuestTable: document.getElementById('probability-quests'),
+  probabilityMercTable: document.getElementById('probability-mercs'),
+  probabilityReputation: document.getElementById('probability-reputation'),
+  probabilityReputationBand: document.getElementById('probability-reputation-band'),
+  probabilityBandSelect: document.getElementById('probability-band-select'),
+  probabilityQuestTitle: document.getElementById('probability-quests-title'),
+  probabilityMercTitle: document.getElementById('probability-mercs-title'),
   debugConfig: document.getElementById('debug-config'),
   configDump: document.getElementById('config-dump'),
   debugConfigToggle: document.getElementById('debug-config-toggle'),
@@ -982,6 +1035,12 @@ function bindEvents() {
   if (elements.resetBtn) {
     elements.resetBtn.addEventListener('click', openResetModal);
   }
+  if (elements.reputationIncrease) {
+    elements.reputationIncrease.addEventListener('click', () => adjustReputation(50));
+  }
+  if (elements.reputationDecrease) {
+    elements.reputationDecrease.addEventListener('click', () => adjustReputation(-50));
+  }
   if (elements.probabilityToggle) {
     elements.probabilityToggle.addEventListener('click', toggleProbabilityPreview);
   }
@@ -1002,6 +1061,9 @@ function bindEvents() {
   }
   if (elements.codexStatusFilter) {
     elements.codexStatusFilter.addEventListener('change', handleCodexFilterChange);
+  }
+  if (elements.probabilityBandSelect) {
+    elements.probabilityBandSelect.addEventListener('change', handleProbabilityBandChange);
   }
   bindTabNavigation();
   elements.modalOverlay.addEventListener('click', (event) => {
@@ -1243,7 +1305,7 @@ function renderDebugPanel() {
     const show = uiState.showDebugConfig;
     elements.debugConfig.classList.toggle('hidden', !show);
     if (show && elements.configDump) {
-      elements.configDump.textContent = JSON.stringify({ CONFIG, QUEST_CONFIG }, null, 2);
+      elements.configDump.textContent = JSON.stringify({ CONFIG, QUEST_CONFIG, SPAWN_TABLE, ECON, REPUTATION }, null, 2);
     }
   }
 }
@@ -1574,10 +1636,11 @@ function load() {
   if (stored) {
     try {
       const parsed = JSON.parse(stored);
-      const normalizedRivals = Array.isArray(parsed.rivals)
-        ? normalizeRivals(parsed.rivals)
-        : DEFAULT_RIVALS.map((rival) => ({ ...rival }));
       const parsedMeta = parsed.meta && typeof parsed.meta === 'object' ? parsed.meta : {};
+      const metaVersion = Number.isFinite(parsedMeta.saveVersion) ? parsedMeta.saveVersion : 1;
+      const normalizedRivals = Array.isArray(parsed.rivals)
+        ? normalizeRivals(parsed.rivals, metaVersion)
+        : DEFAULT_RIVALS.map((rival) => ({ ...rival }));
       const meta = {
         usedNames: Array.isArray(parsedMeta.usedNames)
           ? parsedMeta.usedNames.filter((name) => typeof name === 'string')
@@ -1588,23 +1651,32 @@ function load() {
           ? parsedMeta.hireHistory.filter((id) => typeof id === 'string')
           : []
       };
+      const normalizedReputation = normalizeReputationValue(
+        parsed.reputation,
+        CONFIG.START_REPUTATION,
+        meta.saveVersion
+      );
       state = {
         gold: Math.max(0, Number(parsed.gold) || CONFIG.START_GOLD),
         turn: Math.max(1, Number(parsed.turn) || 1),
         mercs: Array.isArray(parsed.mercs)
-          ? parsed.mercs.map((merc) => normalizeMerc(merc, { skipCodexUpdate: true })).filter(Boolean)
+          ? parsed.mercs
+              .map((merc) => normalizeMerc(merc, { skipCodexUpdate: true, saveVersion: meta.saveVersion }))
+              .filter(Boolean)
           : [],
         quests: Array.isArray(parsed.quests)
-          ? parsed.quests.map((quest) => normalizeQuest(quest, normalizedRivals)).filter(Boolean)
+          ? parsed.quests
+              .map((quest) => normalizeQuest(quest, normalizedRivals, { saveVersion: meta.saveVersion }))
+              .filter(Boolean)
           : [],
         log: Array.isArray(parsed.log) ? parsed.log.slice(-CONFIG.LOG_LIMIT) : [],
         lastRecruitTurn: typeof parsed.lastRecruitTurn === 'number' ? parsed.lastRecruitTurn : null,
-        reputation: clampRep(Number(parsed.reputation), 25),
+        reputation: normalizedReputation,
         rivals: normalizedRivals,
         inventory: normalizeInventory(parsed.inventory),
         meta,
         codex: normalizeCodex(parsed.codex),
-        pool: normalizePool(parsed.pool)
+        pool: normalizePool(parsed.pool, { saveVersion: meta.saveVersion })
       };
       loadedFromStorage = true;
     } catch (error) {
@@ -1620,7 +1692,7 @@ function load() {
       quests: [],
       log: [],
       lastRecruitTurn: null,
-      reputation: 25,
+      reputation: CONFIG.START_REPUTATION,
       rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival })),
       inventory: createEmptyInventory(),
       meta: createDefaultMeta(),
@@ -2025,11 +2097,11 @@ function newTurn() {
  */
 function generateQuest() {
   const tier = rollQuestTier();
-  const [minTurns, maxTurns] = tier === 'S' ? [8, 12] : [5, 6];
+  const range = QUEST_TURN_RANGES[tier] || [CONFIG.QUEST_TURNS_MIN, CONFIG.QUEST_TURNS_MAX];
+  const minTurns = Math.max(CONFIG.QUEST_TURNS_MIN, range[0]);
+  const maxTurns = Math.max(minTurns, range[1]);
   const turns_cost = randomInt(minTurns, maxTurns);
-  const rewardMultiplier = QUEST_CONFIG.rewardMultiplier[tier] ?? 1;
-  const baseReward = randomInt(CONFIG.QUEST_REWARD_MIN, CONFIG.QUEST_REWARD_MAX);
-  const reward = Math.max(CONFIG.QUEST_REWARD_MIN, Math.round(baseReward * rewardMultiplier));
+  const reward = calculateQuestReward(tier, turns_cost);
   const importance = pickQuestImportance(tier);
   return {
     id: `quest_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -2087,15 +2159,8 @@ function createEmptyQuestSlot(base = {}) {
 }
 
 function rollQuestTier() {
-  const roll = Math.random();
-  let cumulative = 0;
-  for (const entry of QUEST_TIER_DISTRIBUTION) {
-    cumulative += entry.weight;
-    if (roll <= cumulative) {
-      return entry.tier;
-    }
-  }
-  return QUEST_TIER_DISTRIBUTION[QUEST_TIER_DISTRIBUTION.length - 1].tier;
+  const distribution = getSpawnDistribution('quests', state.reputation) || SPAWN_TABLE.quests.low;
+  return sampleGradeFromDistribution(distribution, GRADE_ORDER);
 }
 
 function pickQuestImportance(tier) {
@@ -2302,7 +2367,7 @@ function ensureQuestSlots() {
     if (!Array.isArray(quest.assigned_merc_ids)) {
       quest.assigned_merc_ids = [];
     }
-    quest.tier = typeof quest.tier === 'string' && ['S', 'A', 'B', 'C'].includes(quest.tier) ? quest.tier : rollQuestTier();
+    quest.tier = typeof quest.tier === 'string' && GRADE_ORDER.includes(quest.tier) ? quest.tier : rollQuestTier();
     quest.importance = typeof quest.importance === 'string' && CONFIG.WEIGHTS_BY_IMPORTANCE[quest.importance]
       ? quest.importance
       : pickQuestImportance(quest.tier);
@@ -2414,6 +2479,21 @@ function normalizeMerc(merc, options = {}) {
     revisitHistory,
     isReturning: Boolean(merc.isReturning)
   };
+  normalized.atk = Math.max(0, Math.round(Number(merc.atk) || 0));
+  normalized.def = Math.max(0, Math.round(Number(merc.def) || 0));
+  normalized.stamina = Math.max(0, Math.round(Number(merc.stamina) || 0));
+  const statTotal = normalized.atk + normalized.def + normalized.stamina;
+  const currentSigning = Number(merc.signing_bonus);
+  const currentWage = Number(merc.wage_per_quest);
+  const needsEconomyUpdate = options.saveVersion < 4
+    || !Number.isFinite(currentSigning)
+    || !Number.isFinite(currentWage);
+  normalized.signing_bonus = needsEconomyUpdate
+    ? calculateMercSigningBonus(statTotal, 0)
+    : Math.max(0, Math.round(currentSigning));
+  normalized.wage_per_quest = needsEconomyUpdate
+    ? calculateMercWage(statTotal, 0)
+    : Math.max(0, Math.round(currentWage));
   const lastSeen = Number.isFinite(merc.lastSeenTurn) ? Math.max(1, Math.round(merc.lastSeenTurn)) : state.turn;
   if (!options.skipCodexUpdate) {
     updateCodexEntryFromMerc(normalized, { lastSeenTurn: lastSeen });
@@ -2422,7 +2502,7 @@ function normalizeMerc(merc, options = {}) {
 }
 
 /** Normalize a quest object loaded from storage. */
-function normalizeQuest(quest, rivals = DEFAULT_RIVALS) {
+function normalizeQuest(quest, rivals = DEFAULT_RIVALS, options = {}) {
   if (!quest || typeof quest !== 'object') {
     return createEmptyQuestSlot();
   }
@@ -2444,19 +2524,23 @@ function normalizeQuest(quest, rivals = DEFAULT_RIVALS) {
     : generateQuestRequirements(turns_cost);
 
   const rewardValue = Number(quest.reward);
-  const tier = typeof quest.tier === 'string' && ['S', 'A', 'B', 'C'].includes(quest.tier)
+  const tier = typeof quest.tier === 'string' && GRADE_ORDER.includes(quest.tier)
     ? quest.tier
     : rollQuestTier();
   const importance = typeof quest.importance === 'string' && CONFIG.WEIGHTS_BY_IMPORTANCE[quest.importance]
     ? quest.importance
     : pickQuestImportance(tier);
+  const needsEconomyUpdate = options.saveVersion < 4 || !Number.isFinite(rewardValue);
+  const reward = needsEconomyUpdate
+    ? calculateQuestReward(tier, turns_cost, 0)
+    : clamp(Math.round(rewardValue), CONFIG.QUEST_REWARD_MIN, CONFIG.QUEST_REWARD_MAX);
 
   const normalized = {
     id: typeof quest.id === 'string' ? quest.id : `quest_${Math.random().toString(36).slice(2, 8)}`,
     type: typeof quest.type === 'string' ? quest.type : 'dungeon',
     tier,
     importance,
-    reward: clamp(isNaN(rewardValue) ? CONFIG.QUEST_REWARD_MIN : rewardValue, CONFIG.QUEST_REWARD_MIN, CONFIG.QUEST_REWARD_MAX),
+    reward,
     turns_cost,
     req,
     status,
@@ -2588,16 +2672,17 @@ function normalizeContractProb(contractProb, bids, rivals = DEFAULT_RIVALS) {
   return normalized;
 }
 
-function normalizeRivals(rivals) {
+function normalizeRivals(rivals, saveVersion = SAVE_VERSION) {
   return rivals
     .map((rival) => {
       if (!rival || typeof rival !== 'object') {
         return null;
       }
+      const fallbackRep = DEFAULT_RIVALS[0]?.rep || CONFIG.START_REPUTATION;
       return {
         id: typeof rival.id === 'string' ? rival.id : `r${Math.random().toString(36).slice(2, 6)}`,
         name: typeof rival.name === 'string' ? rival.name : 'Rival Guild',
-        rep: clampRep(Number(rival.rep), DEFAULT_RIVALS[0]?.rep || CONFIG.REP_MIN)
+        rep: normalizeReputationValue(rival.rep, fallbackRep, saveVersion)
       };
     })
     .filter(Boolean);
@@ -2627,7 +2712,10 @@ function archiveCandidateForReappearance(candidate) {
   const cooldown = Number.isFinite(candidate.reappearCooldown)
     ? Math.max(1, Math.round(candidate.reappearCooldown))
     : DEFAULT_REAPPEAR_COOLDOWN;
-  const normalized = normalizeMerc(candidate, { skipCodexUpdate: true });
+  const normalized = normalizeMerc(candidate, {
+    skipCodexUpdate: true,
+    saveVersion: state?.meta?.saveVersion ?? SAVE_VERSION
+  });
   if (!normalized || !normalized.id) {
     return false;
   }
@@ -2666,7 +2754,10 @@ function reviveNamedCandidate(archived) {
   if (!archived || typeof archived !== 'object' || !archived.id) {
     return null;
   }
-  const revived = normalizeMerc(archived, { skipCodexUpdate: true });
+  const revived = normalizeMerc(archived, {
+    skipCodexUpdate: true,
+    saveVersion: state?.meta?.saveVersion ?? SAVE_VERSION
+  });
   if (!revived) {
     return null;
   }
@@ -3384,17 +3475,17 @@ function calculateContractProbabilities(quest, playerBid, assignedMercs) {
     type: 'player',
     id: 'player',
     value: sanitizedBid,
-    rep: clampRep(state.reputation, CONFIG.REP_MIN)
+    rep: clampRep(state.reputation, REPUTATION.MIN)
   });
 
   rivalEntries.forEach((entry) => {
-    const rival = rivalMap.get(entry.id) || { id: entry.id, rep: CONFIG.REP_MIN };
+    const rival = rivalMap.get(entry.id) || { id: entry.id, rep: REPUTATION.MIN };
     participants.push({
       key: entry.id,
       type: 'rival',
       id: entry.id,
       value: clamp(Math.round(entry.value), 1, 9999),
-      rep: clampRep(rival.rep, CONFIG.REP_MIN)
+      rep: clampRep(rival.rep, REPUTATION.MIN)
     });
   });
 
@@ -3407,7 +3498,7 @@ function calculateContractProbabilities(quest, playerBid, assignedMercs) {
   const rivalParticipants = participants.filter((participant) => participant.type === 'rival');
   const avgRivalRep = rivalParticipants.length > 0
     ? rivalParticipants.reduce((sum, participant) => sum + (participant.rep || 0), 0) / rivalParticipants.length
-    : clampRep(CONFIG.REP_MIN);
+    : clampRep(REPUTATION.MIN);
 
   const statsTerm = computePlayerStatsTerm(assignedMercs, quest);
   const playerRepTerm = computePlayerRepTerm(avgRivalRep);
@@ -3485,16 +3576,16 @@ function computePlayerStatsTerm(assignedMercs, quest) {
 }
 
 function computePlayerRepTerm(avgRivalRep) {
-  const ourRep = clampRep(state.reputation, CONFIG.REP_MIN);
+  const ourRep = clampRep(state.reputation, REPUTATION.MIN);
   const baseline = Math.max(1, Number(avgRivalRep) || 1);
   const value = (ourRep / baseline) * 0.5 + 0.5;
   return clamp(value, 0, 1);
 }
 
 function computeRivalRepTerm(rivalRep) {
-  const ourRep = clampRep(state.reputation, CONFIG.REP_MIN);
+  const ourRep = clampRep(state.reputation, REPUTATION.MIN);
   const baseline = Math.max(1, ourRep || 1);
-  const value = (clampRep(rivalRep, CONFIG.REP_MIN) / baseline) * 0.5 + 0.5;
+  const value = (clampRep(rivalRep, REPUTATION.MIN) / baseline) * 0.5 + 0.5;
   return clamp(value, 0, 1);
 }
 
@@ -3687,11 +3778,10 @@ function log(message) {
 function render() {
   updateMercDisplayNameCache();
   elements.goldValue.textContent = `${state.gold}G`;
-  if (elements.reputationValue) {
-    elements.reputationValue.textContent = `${state.reputation}`;
-  }
+  renderReputationDisplay();
   renderCalendar();
   renderQuestSpawnRate();
+  renderProbabilityPanel();
   const recruitLocked = CONFIG.RECRUIT_ONCE_PER_TURN && state.lastRecruitTurn === state.turn;
   elements.recruitBtn.disabled = recruitLocked;
   elements.recruitBtn.title = recruitLocked ? '이번 턴에는 이미 용병을 모집했습니다.' : '';
@@ -5036,6 +5126,112 @@ function renderQuestSpawnRate() {
   elements.questSpawnRate.textContent = formatSpawnRate();
 }
 
+function renderReputationDisplay() {
+  const bandInfo = getReputationBandInfo(state.reputation);
+  if (elements.reputationValue) {
+    elements.reputationValue.textContent = `${state.reputation}`;
+  }
+  if (elements.reputationBand) {
+    const label = bandInfo ? bandInfo.name : '알려지지 않음';
+    elements.reputationBand.textContent = label;
+    if (bandInfo && Array.isArray(bandInfo.range)) {
+      elements.reputationBand.setAttribute('title', `${label} (${bandInfo.range[0]}-${bandInfo.range[1]})`);
+    }
+  }
+  if (elements.probabilityReputation) {
+    elements.probabilityReputation.textContent = `${state.reputation}`;
+  }
+  if (elements.probabilityReputationBand) {
+    const label = bandInfo ? bandInfo.name : '알려지지 않음';
+    elements.probabilityReputationBand.textContent = label;
+    if (bandInfo && Array.isArray(bandInfo.range)) {
+      elements.probabilityReputationBand.setAttribute('title', `${label} (${bandInfo.range[0]}-${bandInfo.range[1]})`);
+    }
+  }
+}
+
+function renderProbabilityPanel() {
+  if (!elements.probabilityPanel) {
+    return;
+  }
+  const selection = uiState.probabilityBand || 'current';
+  if (elements.probabilityBandSelect && elements.probabilityBandSelect.value !== selection) {
+    elements.probabilityBandSelect.value = selection;
+  }
+  const bandKey = selection === 'current' ? getReputationBandKey(state.reputation) : selection;
+  const bandInfo = selection === 'current'
+    ? getReputationBandInfo(state.reputation)
+    : REPUTATION.bands.find((band) => band.key === bandKey) || getReputationBandInfo(state.reputation);
+  const bandLabel = bandInfo ? bandInfo.name : '알려지지 않음';
+  const bandRange = bandInfo && Array.isArray(bandInfo.range) ? `${bandInfo.range[0]}-${bandInfo.range[1]}` : '';
+  if (elements.probabilityQuestTitle) {
+    elements.probabilityQuestTitle.textContent = bandRange
+      ? `퀘스트 등급 분포 (${bandLabel} · ${bandRange})`
+      : `퀘스트 등급 분포 (${bandLabel})`;
+  }
+  if (elements.probabilityMercTitle) {
+    elements.probabilityMercTitle.textContent = bandRange
+      ? `용병 등급 분포 (${bandLabel} · ${bandRange})`
+      : `용병 등급 분포 (${bandLabel})`;
+  }
+  const questDistribution = (SPAWN_TABLE.quests && SPAWN_TABLE.quests[bandKey]) || SPAWN_TABLE.quests.low;
+  const mercDistribution = (SPAWN_TABLE.mercs && SPAWN_TABLE.mercs[bandKey]) || SPAWN_TABLE.mercs.low;
+  buildProbabilityTable(elements.probabilityQuestTable, questDistribution);
+  buildProbabilityTable(elements.probabilityMercTable, mercDistribution);
+  elements.probabilityPanel.setAttribute('data-probability-band', bandKey);
+}
+
+function buildProbabilityTable(tableElement, distribution) {
+  if (!tableElement) {
+    return;
+  }
+  const header = `
+    <thead>
+      <tr>
+        <th scope="col" class="probability-table__grade">등급</th>
+        <th scope="col">확률</th>
+      </tr>
+    </thead>
+  `;
+  const rows = GRADE_ORDER.map((grade, index) => {
+    const value = Array.isArray(distribution) ? distribution[index] || 0 : 0;
+    return `
+      <tr>
+        <th scope="row" class="probability-table__grade">${grade}</th>
+        <td class="probability-table__value">${formatSpawnProbability(value)}</td>
+      </tr>
+    `;
+  }).join('');
+  tableElement.innerHTML = `${header}<tbody>${rows}</tbody>`;
+}
+
+function formatSpawnProbability(value) {
+  const percent = Math.max(0, Number(value) || 0) * 100;
+  return percent >= 10 ? `${percent.toFixed(0)}%` : `${percent.toFixed(1)}%`;
+}
+
+function adjustReputation(delta) {
+  const numericDelta = Number(delta);
+  if (!Number.isFinite(numericDelta) || numericDelta === 0) {
+    return;
+  }
+  const nextValue = clampRep(state.reputation + numericDelta, state.reputation + numericDelta);
+  if (nextValue === state.reputation) {
+    return;
+  }
+  state.reputation = nextValue;
+  log(`[DEBUG] 평판 ${numericDelta > 0 ? '+' : ''}${numericDelta} → ${state.reputation}`);
+  save();
+  render();
+}
+
+function handleProbabilityBandChange(event) {
+  const rawValue = event?.target?.value;
+  const allowed = new Set(['current', ...REPUTATION.bands.map((band) => band.key)]);
+  uiState.probabilityBand = allowed.has(rawValue) ? rawValue : 'current';
+  renderProbabilityPanel();
+}
+
 function renderCalendar() {
   if (!elements.calendarDisplay) {
     return;
@@ -5102,11 +5298,11 @@ function openModal() {
 function generateMerc() {
   const grade = rollGrade();
   const gradeModifiers = {
-    S: { statBonus: 3, signMultiplier: 1.4, wageMultiplier: 1.4 },
-    A: { statBonus: 2, signMultiplier: 1.2, wageMultiplier: 1.2 },
-    B: { statBonus: 1, signMultiplier: 1.0, wageMultiplier: 1.0 },
-    C: { statBonus: 0, signMultiplier: 0.8, wageMultiplier: 0.8 },
-    D: { statBonus: -1, signMultiplier: 0.6, wageMultiplier: 0.6 }
+    S: { statBonus: 3 },
+    A: { statBonus: 2 },
+    B: { statBonus: 1 },
+    C: { statBonus: 0 },
+    D: { statBonus: -1 }
   };
   const modifiers = gradeModifiers[grade];
 
@@ -5114,8 +5310,9 @@ function generateMerc() {
   const atk = clamp(randomInt(CONFIG.STAT_MIN, CONFIG.STAT_MAX) + modifiers.statBonus, CONFIG.STAT_MIN, CONFIG.STAT_MAX + 3);
   const def = clamp(randomInt(CONFIG.STAT_MIN, CONFIG.STAT_MAX) + modifiers.statBonus, CONFIG.STAT_MIN, CONFIG.STAT_MAX + 3);
   const stamina = clamp(randomInt(CONFIG.STAT_MIN, CONFIG.STAT_MAX) + modifiers.statBonus, CONFIG.STAT_MIN, CONFIG.STAT_MAX + 3);
-  const signing_bonus = Math.round(clamp(randomInt(CONFIG.MERC_SIGN_MIN, CONFIG.MERC_SIGN_MAX) * modifiers.signMultiplier, CONFIG.MERC_SIGN_MIN, CONFIG.MERC_SIGN_MAX * 1.6));
-  const wage_per_quest = Math.round(clamp(randomInt(CONFIG.MERC_WAGE_MIN, CONFIG.MERC_WAGE_MAX) * modifiers.wageMultiplier, CONFIG.MERC_WAGE_MIN, CONFIG.MERC_WAGE_MAX * 1.6));
+  const statTotal = atk + def + stamina;
+  const signing_bonus = calculateMercSigningBonus(statTotal);
+  const wage_per_quest = calculateMercWage(statTotal);
   const baseLevel = defaultLevelForGrade(grade);
   const level = clamp(baseLevel + randomInt(-1, 2), 1, baseLevel + 4);
   const age = clamp(randomInt(19, 36) + randomInt(0, 4), 18, 48);
@@ -5152,12 +5349,8 @@ function generateMerc() {
  * @returns {'S'|'A'|'B'|'C'|'D'}
  */
 function rollGrade() {
-  const roll = Math.random();
-  if (roll < 0.05) return 'S';
-  if (roll < 0.20) return 'A';
-  if (roll < 0.50) return 'B';
-  if (roll < 0.80) return 'C';
-  return 'D';
+  const distribution = getSpawnDistribution('mercs', state.reputation) || SPAWN_TABLE.mercs.low;
+  return sampleGradeFromDistribution(distribution, GRADE_ORDER);
 }
 
 /**
@@ -5169,14 +5362,101 @@ function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+function randVar(variance = ECON.variance) {
+  const v = Math.max(0, Number(variance) || 0);
+  if (v === 0) {
+    return 1;
+  }
+  return 1 + (Math.random() * 2 - 1) * v;
+}
+
 /** Clamp a value between min and max. */
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function clampRep(value, fallback = CONFIG.REP_MIN) {
-  const numeric = Number.isFinite(value) ? value : fallback;
-  return clamp(numeric, CONFIG.REP_MIN, CONFIG.REP_MAX);
+function clampRep(value, fallback = CONFIG.START_REPUTATION) {
+  const baseFallback = Number.isFinite(fallback) ? fallback : CONFIG.START_REPUTATION;
+  const numeric = Number.isFinite(value) ? value : baseFallback;
+  return clamp(numeric, REPUTATION.MIN, REPUTATION.MAX);
+}
+
+function normalizeReputationValue(value, fallback = CONFIG.START_REPUTATION, saveVersion = SAVE_VERSION) {
+  const baseFallback = Number.isFinite(fallback) ? fallback : CONFIG.START_REPUTATION;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return clampRep(baseFallback);
+  }
+  if (saveVersion < 4) {
+    const bounded = clamp(numeric, 0, 100);
+    const scaled = Math.round((bounded / 100) * REPUTATION.MAX);
+    return clampRep(scaled, baseFallback);
+  }
+  return clampRep(numeric, baseFallback);
+}
+
+function getReputationBandInfo(reputation) {
+  const clamped = clampRep(reputation, CONFIG.START_REPUTATION);
+  return (
+    REPUTATION.bands.find((band) => clamped >= band.range[0] && clamped <= band.range[1])
+    || REPUTATION.bands[REPUTATION.bands.length - 1]
+  );
+}
+
+function getRepBandName(reputation) {
+  const band = getReputationBandInfo(reputation);
+  return band ? band.name : REPUTATION.bands[0].name;
+}
+
+function getReputationBandKey(reputation) {
+  const band = getReputationBandInfo(reputation);
+  return band ? band.key : REPUTATION.bands[REPUTATION.bands.length - 1].key;
+}
+
+function getSpawnDistribution(type, reputation) {
+  const table = SPAWN_TABLE[type];
+  if (!table) {
+    return null;
+  }
+  const key = getReputationBandKey(reputation);
+  return Array.isArray(table[key]) ? table[key] : table.low;
+}
+
+function sampleGradeFromDistribution(distribution, order = GRADE_ORDER) {
+  if (!Array.isArray(distribution) || distribution.length === 0) {
+    return order[order.length - 1];
+  }
+  const total = distribution.reduce((sum, value) => sum + Math.max(0, Number(value) || 0), 0);
+  const normalized = total > 0 ? distribution.map((value) => (Math.max(0, Number(value) || 0) / total)) : distribution;
+  const roll = Math.random();
+  let cumulative = 0;
+  for (let index = 0; index < normalized.length && index < order.length; index += 1) {
+    cumulative += normalized[index];
+    if (roll <= cumulative) {
+      return order[index];
+    }
+  }
+  return order[Math.min(order.length - 1, normalized.length - 1)];
+}
+
+function calculateMercSigningBonus(statTotal, variance = ECON.variance) {
+  const base = Math.max(0, Number(statTotal) || 0);
+  return Math.max(0, Math.round(base * ECON.signingCoefPerPoint * randVar(variance)));
+}
+
+function calculateMercWage(statTotal, variance = ECON.variance) {
+  const base = Math.max(0, Number(statTotal) || 0);
+  return Math.max(0, Math.round(base * ECON.wageCoefPerPoint * randVar(variance)));
+}
+
+function calculateQuestReward(tier, turns, variance = ECON.variance) {
+  const tierKey = typeof tier === 'string' ? tier.toUpperCase() : 'C';
+  const tierCoef = ECON.tierCoef[tierKey] ?? 1;
+  const turnValue = Math.max(1, Number(turns) || 1);
+  const turnCoef = typeof ECON.turnCoef === 'function' ? ECON.turnCoef(turnValue) : 1;
+  const base = ECON.baseReward * tierCoef * turnCoef * randVar(variance);
+  const reward = Math.max(CONFIG.QUEST_REWARD_MIN, Math.round(base));
+  return Math.min(CONFIG.QUEST_REWARD_MAX, reward);
 }
 
 function randomVisibleTurns() {
