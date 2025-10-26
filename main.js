@@ -101,6 +101,10 @@ const DEFAULT_RIVALS = [
   { id: 'r3', name: 'Ashen Company', rep: 61 }
 ];
 
+const NAMED_RATE = 0.1;
+const TOWNIE_RATE = 0.05;
+const DEFAULT_REAPPEAR_COOLDOWN = 10;
+
 const CODEX_STATUS_LABELS = {
   active: '현역',
   retired: '은퇴',
@@ -115,10 +119,17 @@ const CODEX_STATUS_ICONS = {
   left: '↩'
 };
 
+const TAG_ICONS = {
+  named: '★',
+  townie: '🏘',
+  revisit: '↺'
+};
+
 const guildLevel = 1;
 
 let usedNameRegistry = new Set();
 let mercDisplayNameCache = new Map();
+let hireHistorySet = new Set();
 
 const CURRENCY_LOOT_TABLE = [
   { name: '고대 주화 꾸러미', description: '폐허에서 회수한 금빛 주화.', min: 25, max: 70 },
@@ -152,7 +163,8 @@ let state = {
   rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival })),
   inventory: createEmptyInventory(),
   meta: createDefaultMeta(),
-  codex: createEmptyCodex()
+  codex: createEmptyCodex(),
+  pool: createDefaultPools()
 };
 
 let currentRecruitCandidates = [];
@@ -171,7 +183,11 @@ function createEmptyCodex() {
 }
 
 function createDefaultMeta() {
-  return { usedNames: [], saveVersion: SAVE_VERSION, tutorialSeen: false };
+  return { usedNames: [], saveVersion: SAVE_VERSION, tutorialSeen: false, hireHistory: [] };
+}
+
+function createDefaultPools() {
+  return { namedArchive: {} };
 }
 
 function ensureCodex() {
@@ -190,10 +206,85 @@ function ensureMeta() {
   if (!Array.isArray(state.meta.usedNames)) {
     state.meta.usedNames = [];
   }
+  if (!Array.isArray(state.meta.hireHistory)) {
+    state.meta.hireHistory = [];
+  }
   if (typeof state.meta.saveVersion !== 'number') {
     state.meta.saveVersion = 1;
   }
   state.meta.tutorialSeen = Boolean(state.meta.tutorialSeen);
+}
+
+function ensurePool() {
+  if (!state.pool || typeof state.pool !== 'object') {
+    state.pool = createDefaultPools();
+  }
+  if (!state.pool.namedArchive || typeof state.pool.namedArchive !== 'object') {
+    state.pool.namedArchive = {};
+  }
+}
+
+function ensureHireHistoryStructure() {
+  ensureMeta();
+  if (!(hireHistorySet instanceof Set)) {
+    hireHistorySet = new Set();
+  }
+  if (!Array.isArray(state.meta.hireHistory)) {
+    state.meta.hireHistory = [];
+  }
+}
+
+function initializeHireHistory() {
+  ensureHireHistoryStructure();
+  const beforeList = Array.isArray(state.meta.hireHistory) ? state.meta.hireHistory.slice() : [];
+  hireHistorySet = new Set(
+    beforeList.filter((id) => typeof id === 'string' && id.trim().length > 0)
+  );
+  let changed = false;
+  (Array.isArray(state.mercs) ? state.mercs : []).forEach((merc) => {
+    if (merc && merc.id) {
+      const hadId = hireHistorySet.has(merc.id);
+      hireHistorySet.add(merc.id);
+      if (!hadId) {
+        changed = true;
+      }
+      if (!state.codex.mercs[merc.id]) {
+        addToCodexOnHire(merc);
+        changed = true;
+      }
+    }
+  });
+  syncHireHistoryToState();
+  if (!changed) {
+    const afterList = state.meta.hireHistory.slice();
+    if (afterList.length !== beforeList.length) {
+      changed = true;
+    } else {
+      const sortedBefore = beforeList.slice().sort();
+      const sortedAfter = afterList.slice().sort();
+      for (let i = 0; i < sortedBefore.length; i += 1) {
+        if (sortedBefore[i] !== sortedAfter[i]) {
+          changed = true;
+          break;
+        }
+      }
+    }
+  }
+  return changed;
+}
+
+function syncHireHistoryToState() {
+  ensureHireHistoryStructure();
+  state.meta.hireHistory = Array.from(hireHistorySet);
+}
+
+function recordHireHistory(mercId) {
+  if (!mercId) {
+    return;
+  }
+  ensureHireHistoryStructure();
+  hireHistorySet.add(mercId);
+  syncHireHistoryToState();
 }
 
 function syncUsedNamesToState() {
@@ -234,6 +325,67 @@ function normalizeCodexStatus(status) {
   return CODEX_STATUS_LABELS[status] ? status : 'active';
 }
 
+function normalizeRevisitRecord(record) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+  const turn = Number.isFinite(record.turn) ? Math.max(1, Math.round(record.turn)) : null;
+  const year = Number.isFinite(record.year) ? Math.max(0, Math.round(record.year)) : null;
+  const month = Number.isFinite(record.month) ? clamp(Math.round(record.month), 1, 12) : null;
+  if (turn == null && year == null && month == null) {
+    return null;
+  }
+  return { turn: turn ?? null, year: year ?? null, month: month ?? null };
+}
+
+function normalizeRevisitHistory(history) {
+  if (!Array.isArray(history)) {
+    return [];
+  }
+  const normalized = history
+    .map((record) => normalizeRevisitRecord(record))
+    .filter(Boolean);
+  normalized.sort((a, b) => {
+    const turnA = Number.isFinite(a.turn) ? a.turn : Number.MAX_SAFE_INTEGER;
+    const turnB = Number.isFinite(b.turn) ? b.turn : Number.MAX_SAFE_INTEGER;
+    if (turnA !== turnB) {
+      return turnA - turnB;
+    }
+    const yearA = Number.isFinite(a.year) ? a.year : Number.MAX_SAFE_INTEGER;
+    const yearB = Number.isFinite(b.year) ? b.year : Number.MAX_SAFE_INTEGER;
+    if (yearA !== yearB) {
+      return yearA - yearB;
+    }
+    const monthA = Number.isFinite(a.month) ? a.month : Number.MAX_SAFE_INTEGER;
+    const monthB = Number.isFinite(b.month) ? b.month : Number.MAX_SAFE_INTEGER;
+    return monthA - monthB;
+  });
+  return normalized;
+}
+
+function mergeRevisitHistory(existingHistory, candidateHistory, candidateCount = 0) {
+  const base = normalizeRevisitHistory(existingHistory);
+  const incoming = normalizeRevisitHistory(candidateHistory);
+  let changed = false;
+  incoming.forEach((record) => {
+    const duplicate = base.some((item) =>
+      item.turn === record.turn
+      && item.year === record.year
+      && item.month === record.month
+    );
+    if (!duplicate) {
+      base.push(record);
+      changed = true;
+    }
+  });
+  const normalized = normalizeRevisitHistory(base);
+  if (normalized.length !== base.length) {
+    changed = true;
+  }
+  const count = Math.max(normalized.length, Math.max(0, Math.round(Number(candidateCount) || 0)));
+  return { history: normalized, count, changed };
+}
+
 function normalizeCodexEntry(entry, fallbackId) {
   if (!entry || typeof entry !== 'object') {
     return null;
@@ -254,7 +406,7 @@ function normalizeCodexEntry(entry, fallbackId) {
           : null
       }
     : null;
-  return {
+  const normalized = {
     id,
     name: typeof entry.name === 'string' ? entry.name : '미상 용병',
     grade,
@@ -269,8 +421,17 @@ function normalizeCodexEntry(entry, fallbackId) {
     level: Number.isFinite(entry.level)
       ? Math.max(1, Math.round(entry.level))
       : defaultLevelForGrade(grade),
-    age: Number.isFinite(entry.age) ? Math.max(0, Math.round(entry.age)) : null
+    age: Number.isFinite(entry.age) ? Math.max(0, Math.round(entry.age)) : null,
+    isNamed: Boolean(entry.isNamed),
+    isTownie: Boolean(entry.isTownie)
   };
+  const revisitHistory = normalizeRevisitHistory(entry.revisitHistory);
+  normalized.revisitHistory = revisitHistory;
+  normalized.revisitCount = Math.max(
+    revisitHistory.length,
+    Math.max(0, Math.round(Number(entry.revisitCount) || 0))
+  );
+  return normalized;
 }
 
 function normalizeCodex(rawCodex) {
@@ -288,7 +449,41 @@ function normalizeCodex(rawCodex) {
   return normalized;
 }
 
-function ensureCodexEntry(merc) {
+function normalizePool(rawPool) {
+  const normalized = createDefaultPools();
+  if (!rawPool || typeof rawPool !== 'object') {
+    return normalized;
+  }
+  const archive = rawPool.namedArchive;
+  if (archive && typeof archive === 'object') {
+    Object.keys(archive).forEach((key) => {
+      const rawEntry = archive[key];
+      const normalizedMerc = normalizeMerc(rawEntry, { skipCodexUpdate: true });
+      if (normalizedMerc && normalizedMerc.id) {
+        const cooldownUntilTurn = Number.isFinite(rawEntry?.cooldownUntilTurn)
+          ? Math.max(0, Math.round(rawEntry.cooldownUntilTurn))
+          : normalizedMerc.cooldownUntilTurn;
+        const reappearCooldown = Number.isFinite(rawEntry?.reappearCooldown)
+          ? Math.max(1, Math.round(rawEntry.reappearCooldown))
+          : normalizedMerc.reappearCooldown;
+        const revisitCount = Math.max(
+          normalizedMerc.revisitHistory.length,
+          Math.max(0, Math.round(Number(rawEntry?.revisitCount) || normalizedMerc.revisitCount || 0))
+        );
+        normalized.namedArchive[normalizedMerc.id] = {
+          ...normalizedMerc,
+          cooldownUntilTurn,
+          reappearCooldown,
+          revisitCount,
+          isReturning: Boolean(rawEntry?.isReturning)
+        };
+      }
+    });
+  }
+  return normalized;
+}
+
+function ensureCodexEntry(merc, allowCreate = false) {
   if (!merc || typeof merc !== 'object' || !merc.id) {
     return null;
   }
@@ -303,7 +498,16 @@ function ensureCodexEntry(merc) {
         turn: Math.max(1, Number(state.turn) || 1)
       };
     }
+    if (merc.isNamed && !existing.isNamed) {
+      existing.isNamed = true;
+    }
+    if (merc.isTownie && !existing.isTownie) {
+      existing.isTownie = true;
+    }
     return existing;
+  }
+  if (!allowCreate) {
+    return null;
   }
   const date = getCalendarDate();
   const firstMet = {
@@ -325,7 +529,11 @@ function ensureCodexEntry(merc) {
       wage: merc.wage_per_quest,
       signingBonus: merc.signing_bonus,
       level: merc.level,
-      age: merc.age
+      age: merc.age,
+      isNamed: Boolean(merc.isNamed),
+      isTownie: Boolean(merc.isTownie),
+      revisitHistory: Array.isArray(merc.revisitHistory) ? merc.revisitHistory : [],
+      revisitCount: Math.max(0, Number(merc.revisitCount) || 0)
     },
     merc.id
   );
@@ -333,11 +541,53 @@ function ensureCodexEntry(merc) {
   return seedEntry;
 }
 
+function addToCodexOnHire(merc) {
+  if (!merc || typeof merc !== 'object' || !merc.id) {
+    return null;
+  }
+  ensureCodex();
+  ensureHireHistoryStructure();
+  const entry = ensureCodexEntry(merc, true);
+  if (!entry) {
+    return null;
+  }
+  let changed = false;
+  if (merc.isNamed && !entry.isNamed) {
+    entry.isNamed = true;
+    changed = true;
+  }
+  if (merc.isTownie && !entry.isTownie) {
+    entry.isTownie = true;
+    changed = true;
+  }
+  const merged = mergeRevisitHistory(entry.revisitHistory, merc.revisitHistory, merc.revisitCount);
+  if (merged.changed) {
+    entry.revisitHistory = merged.history;
+    entry.revisitCount = merged.count;
+    changed = true;
+  } else {
+    const revisitCandidate = Math.max(
+      Number(entry.revisitCount) || 0,
+      Math.max(0, Math.round(Number(merc.revisitCount) || 0))
+    );
+    if (revisitCandidate !== entry.revisitCount) {
+      entry.revisitCount = revisitCandidate;
+      changed = true;
+    }
+  }
+  entry.status = normalizeCodexStatus(entry.status || 'active');
+  recordHireHistory(merc.id);
+  if (changed) {
+    state.codex.mercs[merc.id] = normalizeCodexEntry(entry, merc.id);
+  }
+  return state.codex.mercs[merc.id];
+}
+
 function updateCodexEntryFromMerc(merc, overrides = {}) {
   if (!merc || typeof merc !== 'object' || !merc.id) {
     return false;
   }
-  const entry = ensureCodexEntry(merc);
+  const entry = ensureCodexEntry(merc, false);
   if (!entry) {
     return false;
   }
@@ -446,6 +696,29 @@ function updateCodexEntryFromMerc(merc, overrides = {}) {
     }
   }
 
+  if (merc.isNamed && !entry.isNamed) {
+    entry.isNamed = true;
+    changed = true;
+  }
+  if (merc.isTownie && !entry.isTownie) {
+    entry.isTownie = true;
+    changed = true;
+  }
+  const mergedRevisits = mergeRevisitHistory(entry.revisitHistory, merc.revisitHistory, merc.revisitCount);
+  if (mergedRevisits.changed) {
+    entry.revisitHistory = mergedRevisits.history;
+    entry.revisitCount = mergedRevisits.count;
+    changed = true;
+  } else {
+    const revisitCandidate = Math.max(
+      Number(entry.revisitCount) || 0,
+      Math.max(0, Math.round(Number(merc.revisitCount) || 0))
+    );
+    if (revisitCandidate !== entry.revisitCount) {
+      entry.revisitCount = revisitCandidate;
+      changed = true;
+    }
+  }
   return changed;
 }
 
@@ -457,6 +730,26 @@ function syncCodexFromMercRoster() {
     }
   });
   return changed;
+}
+
+function cleanupCodexForNonHires() {
+  ensureCodex();
+  ensureHireHistoryStructure();
+  const keepIds = new Set();
+  (Array.isArray(state.mercs) ? state.mercs : []).forEach((merc) => {
+    if (merc && merc.id) {
+      keepIds.add(merc.id);
+    }
+  });
+  hireHistorySet.forEach((id) => keepIds.add(id));
+  let removed = false;
+  Object.keys(state.codex.mercs).forEach((id) => {
+    if (!keepIds.has(id)) {
+      delete state.codex.mercs[id];
+      removed = true;
+    }
+  });
+  return removed;
 }
 
 function getCodexEntryById(mercId) {
@@ -1290,12 +1583,17 @@ function load() {
           ? parsedMeta.usedNames.filter((name) => typeof name === 'string')
           : [],
         tutorialSeen: Boolean(parsedMeta.tutorialSeen),
-        saveVersion: Number.isFinite(parsedMeta.saveVersion) ? parsedMeta.saveVersion : 1
+        saveVersion: Number.isFinite(parsedMeta.saveVersion) ? parsedMeta.saveVersion : 1,
+        hireHistory: Array.isArray(parsedMeta.hireHistory)
+          ? parsedMeta.hireHistory.filter((id) => typeof id === 'string')
+          : []
       };
       state = {
         gold: Math.max(0, Number(parsed.gold) || CONFIG.START_GOLD),
         turn: Math.max(1, Number(parsed.turn) || 1),
-        mercs: Array.isArray(parsed.mercs) ? parsed.mercs.map(normalizeMerc).filter(Boolean) : [],
+        mercs: Array.isArray(parsed.mercs)
+          ? parsed.mercs.map((merc) => normalizeMerc(merc, { skipCodexUpdate: true })).filter(Boolean)
+          : [],
         quests: Array.isArray(parsed.quests)
           ? parsed.quests.map((quest) => normalizeQuest(quest, normalizedRivals)).filter(Boolean)
           : [],
@@ -1305,7 +1603,8 @@ function load() {
         rivals: normalizedRivals,
         inventory: normalizeInventory(parsed.inventory),
         meta,
-        codex: normalizeCodex(parsed.codex)
+        codex: normalizeCodex(parsed.codex),
+        pool: normalizePool(parsed.pool)
       };
       loadedFromStorage = true;
     } catch (error) {
@@ -1325,13 +1624,16 @@ function load() {
       rivals: DEFAULT_RIVALS.map((rival) => ({ ...rival })),
       inventory: createEmptyInventory(),
       meta: createDefaultMeta(),
-      codex: createEmptyCodex()
+      codex: createEmptyCodex(),
+      pool: createDefaultPools()
     };
     needsResave = true;
   }
 
   ensureMeta();
   ensureCodex();
+  ensurePool();
+  const hireHistoryChanged = initializeHireHistory();
   const previousVersion = Number.isFinite(state.meta.saveVersion) ? state.meta.saveVersion : 1;
   if (previousVersion !== SAVE_VERSION) {
     state.meta.saveVersion = SAVE_VERSION;
@@ -1340,6 +1642,12 @@ function load() {
   state.meta.tutorialSeen = Boolean(state.meta.tutorialSeen);
 
   initializeUsedNames();
+  if (hireHistoryChanged) {
+    needsResave = true;
+  }
+  if (cleanupCodexForNonHires()) {
+    needsResave = true;
+  }
   if (syncCodexFromMercRoster()) {
     needsResave = true;
   }
@@ -1363,6 +1671,8 @@ function save() {
   syncUsedNamesToState();
   ensureMeta();
   ensureCodex();
+  ensurePool();
+  syncHireHistoryToState();
   state.meta.saveVersion = SAVE_VERSION;
   state.meta.tutorialSeen = Boolean(state.meta.tutorialSeen);
   const toSave = {
@@ -1376,7 +1686,8 @@ function save() {
     rivals: state.rivals,
     inventory: state.inventory,
     meta: state.meta,
-    codex: state.codex
+    codex: state.codex,
+    pool: state.pool
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
 }
@@ -1689,6 +2000,7 @@ function newTurn() {
   spawnQuestsForEmptySlots(false);
   ensureQuestSlots();
   syncMercBusyFromQuests();
+  archiveCurrentRecruitPool();
   state.lastRecruitTurn = null;
   currentRecruitCandidates = [];
 
@@ -2050,7 +2362,7 @@ function normalizeCurrencyItem(item) {
 }
 
 /** Normalize a mercenary object loaded from storage. */
-function normalizeMerc(merc) {
+function normalizeMerc(merc, options = {}) {
   if (!merc || typeof merc !== 'object') {
     return null;
   }
@@ -2072,6 +2384,17 @@ function normalizeMerc(merc) {
         .filter((entry) => entry && entry.trim().length > 0)
         .slice(-8)
     : [];
+  const reappearCooldown = Number.isFinite(merc.reappearCooldown)
+    ? Math.max(1, Math.round(merc.reappearCooldown))
+    : DEFAULT_REAPPEAR_COOLDOWN;
+  const cooldownUntilTurn = Number.isFinite(merc.cooldownUntilTurn)
+    ? Math.max(0, Math.round(merc.cooldownUntilTurn))
+    : null;
+  const revisitHistory = normalizeRevisitHistory(merc.revisitHistory);
+  const revisitCount = Math.max(
+    revisitHistory.length,
+    Math.max(0, Math.round(Number(merc.revisitCount) || 0))
+  );
   const normalized = {
     ...merc,
     name,
@@ -2082,10 +2405,19 @@ function normalizeMerc(merc) {
     fatigue,
     relationship,
     benched,
-    journal
+    journal,
+    isNamed: Boolean(merc.isNamed),
+    isTownie: Boolean(merc.isTownie),
+    reappearCooldown,
+    cooldownUntilTurn,
+    revisitCount,
+    revisitHistory,
+    isReturning: Boolean(merc.isReturning)
   };
   const lastSeen = Number.isFinite(merc.lastSeenTurn) ? Math.max(1, Math.round(merc.lastSeenTurn)) : state.turn;
-  updateCodexEntryFromMerc(normalized, { lastSeenTurn: lastSeen });
+  if (!options.skipCodexUpdate) {
+    updateCodexEntryFromMerc(normalized, { lastSeenTurn: lastSeen });
+  }
   return normalized;
 }
 
@@ -2284,6 +2616,158 @@ function syncMercBusyFromQuests() {
   });
 }
 
+function archiveCandidateForReappearance(candidate) {
+  if (!candidate || candidate.hired) {
+    return false;
+  }
+  if (!candidate.isNamed && !candidate.isTownie) {
+    return false;
+  }
+  ensurePool();
+  const cooldown = Number.isFinite(candidate.reappearCooldown)
+    ? Math.max(1, Math.round(candidate.reappearCooldown))
+    : DEFAULT_REAPPEAR_COOLDOWN;
+  const normalized = normalizeMerc(candidate, { skipCodexUpdate: true });
+  if (!normalized || !normalized.id) {
+    return false;
+  }
+  const snapshot = {
+    ...normalized,
+    hired: undefined,
+    cooldownUntilTurn: Math.max(1, Number(state.turn) || 1) + cooldown,
+    reappearCooldown: cooldown,
+    isReturning: false
+  };
+  delete snapshot.hired;
+  state.pool.namedArchive[normalized.id] = snapshot;
+  return true;
+}
+
+function archiveCurrentRecruitPool() {
+  let archived = false;
+  (Array.isArray(currentRecruitCandidates) ? currentRecruitCandidates : []).forEach((candidate) => {
+    if (archiveCandidateForReappearance(candidate)) {
+      archived = true;
+    }
+  });
+  return archived;
+}
+
+function createRevisitRecord() {
+  const date = getCalendarDate();
+  return {
+    turn: Math.max(1, Number(state.turn) || 1),
+    year: Number.isFinite(date.year) ? date.year : null,
+    month: Number.isFinite(date.month) ? date.month : null
+  };
+}
+
+function reviveNamedCandidate(archived) {
+  if (!archived || typeof archived !== 'object' || !archived.id) {
+    return null;
+  }
+  const revived = normalizeMerc(archived, { skipCodexUpdate: true });
+  if (!revived) {
+    return null;
+  }
+  const revisitRecord = createRevisitRecord();
+  const merged = mergeRevisitHistory(revived.revisitHistory, [revisitRecord], (revived.revisitCount || 0) + 1);
+  revived.revisitHistory = merged.history;
+  revived.revisitCount = merged.count;
+  revived.cooldownUntilTurn = null;
+  revived.isReturning = true;
+  return revived;
+}
+
+function collectReappearingCandidates(limit) {
+  ensurePool();
+  const ready = [];
+  const archive = state.pool.namedArchive;
+  const ids = Object.keys(archive);
+  ids.forEach((id) => {
+    if (ready.length >= limit) {
+      return;
+    }
+    const entry = archive[id];
+    const cooldownUntil = Number.isFinite(entry?.cooldownUntilTurn)
+      ? Math.max(0, Math.round(entry.cooldownUntilTurn))
+      : null;
+    if (cooldownUntil != null && Number(state.turn) < cooldownUntil) {
+      return;
+    }
+    const revived = reviveNamedCandidate(entry);
+    if (revived) {
+      ready.push(revived);
+      delete archive[id];
+    }
+  });
+  return ready;
+}
+
+function buildRecruitCandidates() {
+  const limit = Math.max(1, Number(CONFIG.MERC_POOL_SIZE) || 1);
+  const ready = collectReappearingCandidates(limit);
+  const candidates = ready.map((revived) => ({ ...revived, hired: false }));
+  if (ready.length > 0) {
+    ready.forEach((merc) => {
+      log(`[T${state.turn}] ${merc.name}이(가) 모집소를 다시 찾았습니다.`);
+    });
+  }
+  while (candidates.length < limit) {
+    candidates.push({ ...generateMerc(), hired: false });
+  }
+  return candidates.slice(0, limit);
+}
+
+function createTagElement(type, label) {
+  const span = document.createElement('span');
+  span.className = `tag tag--${type}`;
+  const icon = TAG_ICONS[type];
+  if (icon) {
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'tag__icon';
+    iconSpan.textContent = icon;
+    span.appendChild(iconSpan);
+  }
+  const textSpan = document.createElement('span');
+  textSpan.className = 'tag__label';
+  textSpan.textContent = label;
+  span.appendChild(textSpan);
+  return span;
+}
+
+function createTagRow(attributes = {}, options = {}) {
+  const tags = [];
+  if (attributes.isNamed) {
+    tags.push(createTagElement('named', '네임드'));
+  }
+  if (attributes.isTownie) {
+    tags.push(createTagElement('townie', '마을 출신'));
+  }
+  const revisitCount = Math.max(0, Math.round(Number(attributes.revisitCount) || 0));
+  const returning = Boolean(attributes.returning) || revisitCount > 0;
+  if (returning) {
+    const baseLabel = options.revisitLabel || '재방문';
+    const label = options.showRevisitCount === false || revisitCount === 0
+      ? baseLabel
+      : `${baseLabel} ${revisitCount}회`;
+    tags.push(createTagElement('revisit', label));
+  }
+  if (tags.length === 0) {
+    return null;
+  }
+  const row = document.createElement('div');
+  row.className = 'tag-row';
+  if (options.compact) {
+    row.classList.add('tag-row--compact');
+  }
+  if (options.detail) {
+    row.classList.add('tag-row--detail');
+  }
+  tags.forEach((tag) => row.appendChild(tag));
+  return row;
+}
+
 /**
  * Open the recruit modal with a persistent pool of candidate mercenaries.
  */
@@ -2294,7 +2778,8 @@ function openRecruit() {
   }
 
   if (state.lastRecruitTurn !== state.turn || currentRecruitCandidates.length === 0) {
-    currentRecruitCandidates = Array.from({ length: CONFIG.MERC_POOL_SIZE }, () => ({ ...generateMerc(), hired: false }));
+    archiveCurrentRecruitPool();
+    currentRecruitCandidates = buildRecruitCandidates();
   }
 
   state.lastRecruitTurn = state.turn;
@@ -2336,6 +2821,16 @@ function renderRecruitModalBody() {
     cost.textContent = `계약금 ${candidate.signing_bonus}G`;
     header.append(name, cost);
 
+    const tagRow = createTagRow(
+      {
+        isNamed: candidate.isNamed,
+        isTownie: candidate.isTownie,
+        revisitCount: candidate.revisitCount,
+        returning: candidate.isReturning
+      },
+      { compact: true }
+    );
+
     const stats = document.createElement('div');
     stats.className = 'merc-card__stats';
     stats.innerHTML = `ATK ${candidate.atk} · DEF ${candidate.def} · STAM ${candidate.stamina} · 임금 ${candidate.wage_per_quest}G`;
@@ -2350,7 +2845,11 @@ function renderRecruitModalBody() {
       hireBtn.addEventListener('click', () => hireMerc(candidate.id));
     }
 
-    body.append(header, stats, hireBtn);
+    if (tagRow) {
+      body.append(header, tagRow, stats, hireBtn);
+    } else {
+      body.append(header, stats, hireBtn);
+    }
     card.append(portrait, body);
     elements.modalBody.appendChild(card);
   });
@@ -2376,6 +2875,7 @@ function hireMerc(mercId) {
   const hiredMerc = { ...candidate };
   delete hiredMerc.hired;
   state.mercs.push(hiredMerc);
+  addToCodexOnHire(hiredMerc);
   updateCodexEntryFromMerc(hiredMerc, { lastSeenTurn: state.turn });
   log(`[T${state.turn}] ${candidate.name} [${candidate.grade}] 용병을 고용했습니다. 계약금 ${candidate.signing_bonus}G 지급.`);
   save();
@@ -3328,7 +3828,25 @@ function renderCodex() {
     row.dataset.mercId = entry.id;
 
     const nameCell = document.createElement('td');
-    nameCell.textContent = entry.name || '미상 용병';
+    const nameWrapper = document.createElement('div');
+    nameWrapper.className = 'codex-name-cell';
+    const nameLabel = document.createElement('span');
+    nameLabel.className = 'codex-name';
+    nameLabel.textContent = entry.name || '미상 용병';
+    nameWrapper.appendChild(nameLabel);
+    const nameTags = createTagRow(
+      {
+        isNamed: entry.isNamed,
+        isTownie: entry.isTownie,
+        revisitCount: entry.revisitCount,
+        returning: entry.revisitCount > 0
+      },
+      { compact: true, showRevisitCount: false }
+    );
+    if (nameTags) {
+      nameWrapper.appendChild(nameTags);
+    }
+    nameCell.appendChild(nameWrapper);
     row.appendChild(nameCell);
 
     const gradeCell = document.createElement('td');
@@ -3428,6 +3946,19 @@ function renderCodexDetail(mercId) {
   metaLine.appendChild(createCodexStatusChip(entry.status));
   header.appendChild(metaLine);
 
+  const detailTags = createTagRow(
+    {
+      isNamed: entry.isNamed,
+      isTownie: entry.isTownie,
+      revisitCount: entry.revisitCount,
+      returning: entry.revisitCount > 0
+    },
+    { detail: true }
+  );
+  if (detailTags) {
+    header.appendChild(detailTags);
+  }
+
   container.appendChild(header);
 
   const summarySection = document.createElement('div');
@@ -3447,6 +3978,8 @@ function renderCodexDetail(mercId) {
   addCodexSummaryRow(summaryList, '첫 만남', formatFirstMet(entry.firstMet));
   addCodexSummaryRow(summaryList, '최근 본 턴', formatLastSeenTurn(entry.lastSeenTurn));
   addCodexSummaryRow(summaryList, '완료 퀘스트', `${Math.max(0, Number(entry.questsCompleted) || 0)}`);
+  addCodexSummaryRow(summaryList, '재방문', entry.revisitCount > 0 ? `${entry.revisitCount}회` : '기록 없음');
+  addCodexSummaryRow(summaryList, '재등장 기록', formatRevisitHistory(entry.revisitHistory));
   summarySection.appendChild(summaryList);
   container.appendChild(summarySection);
 
@@ -3564,6 +4097,32 @@ function formatFirstMet(firstMet) {
 
 function formatLastSeenTurn(turn) {
   return Number.isFinite(turn) ? `T${turn}` : '미상';
+}
+
+function formatRevisitHistory(history) {
+  if (!Array.isArray(history) || history.length === 0) {
+    return '기록 없음';
+  }
+  const formatted = history.map((record) => {
+    const turnPart = Number.isFinite(record?.turn) ? `T${record.turn}` : null;
+    const hasYear = Number.isFinite(record?.year);
+    const hasMonth = Number.isFinite(record?.month);
+    const monthLabel = hasMonth ? String(record.month).padStart(2, '0') : null;
+    if (hasYear && monthLabel && turnPart) {
+      return `${record.year}.${monthLabel} / ${turnPart}`;
+    }
+    if (turnPart && hasYear && monthLabel == null) {
+      return `${record.year}년 / ${turnPart}`;
+    }
+    if (turnPart) {
+      return turnPart;
+    }
+    if (hasYear && monthLabel) {
+      return `${record.year}.${monthLabel}`;
+    }
+    return '미상';
+  });
+  return formatted.join(' · ');
 }
 
 function formatCodexStatus(status) {
@@ -4576,9 +5135,15 @@ function generateMerc() {
     fatigue: randomInt(5, 15),
     relationship: randomInt(35, 55),
     benched: randomInt(10, 25),
-    journal: []
+    journal: [],
+    isNamed: Math.random() < NAMED_RATE,
+    isTownie: Math.random() < TOWNIE_RATE,
+    reappearCooldown: DEFAULT_REAPPEAR_COOLDOWN,
+    cooldownUntilTurn: null,
+    revisitCount: 0,
+    revisitHistory: [],
+    isReturning: false
   };
-  updateCodexEntryFromMerc(merc, { lastSeenTurn: Math.max(1, Number(state.turn) || 1) });
   return merc;
 }
 
@@ -4637,6 +5202,7 @@ function formatSpawnRate() {
  * @property {number} reputation
  * @property {Rival[]} rivals
  * @property {{mercs: {[key: string]: CodexEntry}}} codex
+ * @property {{namedArchive: {[key: string]: Merc}}} pool
  *
  * @typedef {Object} Merc
  * @property {string} id
@@ -4652,6 +5218,13 @@ function formatSpawnRate() {
  * @property {number} relationship
  * @property {number} benched
  * @property {string[]} journal
+ * @property {boolean} isNamed
+ * @property {boolean} isTownie
+ * @property {number} reappearCooldown
+ * @property {?number} cooldownUntilTurn
+ * @property {number} revisitCount
+ * @property {{turn: number|null, year: number|null, month: number|null}[]} revisitHistory
+ * @property {boolean} isReturning
  *
  * @typedef {Object} QuestEvent
  * @property {number} turn
@@ -4701,4 +5274,8 @@ function formatSpawnRate() {
  * @property {number} signingBonus
  * @property {number} level
  * @property {?number} age
- */
+ * @property {boolean} isNamed
+ * @property {boolean} isTownie
+ * @property {number} revisitCount
+ * @property {{turn: number|null, year: number|null, month: number|null}[]} revisitHistory
+*/

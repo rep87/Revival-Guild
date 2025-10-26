@@ -1452,6 +1452,12 @@ body.no-bg-asset {
   align-items: center;
 }
 
+.codex-hint {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  color: rgba(221, 186, 110, 0.72);
+}
+
 .codex-controls input,
 .codex-controls select {
   background: rgba(18, 14, 10, 0.6);
@@ -1532,6 +1538,74 @@ body.no-bg-asset {
 .codex-table td:first-child {
   font-weight: 600;
   color: var(--color-text-primary);
+}
+
+.codex-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.codex-name {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.tag-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.tag-row--compact {
+  margin-top: 4px;
+}
+
+.tag-row--detail {
+  margin-top: 8px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  border: 1px solid rgba(221, 186, 110, 0.35);
+  background: rgba(221, 186, 110, 0.12);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.tag__icon {
+  margin-right: 4px;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.tag__label {
+  line-height: 1;
+}
+
+.tag--named {
+  background: rgba(196, 123, 42, 0.22);
+  border-color: rgba(196, 123, 42, 0.45);
+  color: #f6d49c;
+}
+
+.tag--townie {
+  background: rgba(64, 132, 128, 0.22);
+  border-color: rgba(64, 132, 128, 0.4);
+  color: #bde6e0;
+}
+
+.tag--revisit {
+  background: rgba(76, 128, 68, 0.22);
+  border-color: rgba(76, 128, 68, 0.42);
+  color: #c8f7c0;
 }
 
 .codex-table tbody tr {
