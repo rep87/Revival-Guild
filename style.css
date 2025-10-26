@@ -110,6 +110,31 @@ body.no-bg-asset {
   font-size: 1.2rem;
 }
 
+.reputation-band {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 1rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.reputation-debug {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.btn--icon {
+  min-width: auto;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
 .top-bar__spawn-rate {
   font-size: 0.95rem;
   color: var(--color-text-secondary);
@@ -203,6 +228,128 @@ body.no-bg-asset {
 
 .btn--danger:hover {
   background: linear-gradient(135deg, #7e2f2f, #471a1a);
+}
+
+.probability-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.probability-panel__summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.probability-panel__current {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.probability-panel__label {
+  font-size: 0.9rem;
+  color: var(--color-text-secondary);
+}
+
+.probability-panel__value {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.probability-panel__rep {
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+.probability-panel__band {
+  font-size: 1.1rem;
+  font-weight: 600;
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.probability-panel__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.probability-panel__preview label {
+  font-size: 0.9rem;
+  color: var(--color-text-secondary);
+}
+
+.probability-panel__preview select {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--color-text-primary);
+  padding: 6px 10px;
+  border-radius: 10px;
+  min-width: 220px;
+}
+
+.probability-panel__cards {
+  display: grid;
+  gap: 16px;
+}
+
+@media (min-width: 960px) {
+  .probability-panel__cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.probability-card {
+  background: rgba(18, 14, 10, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow-soft);
+}
+
+.probability-card h4 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.probability-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.probability-table thead {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.probability-table th,
+.probability-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: left;
+}
+
+.probability-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.probability-table__grade {
+  font-weight: 700;
+  width: 40px;
+}
+
+.probability-table__value {
+  font-variant-numeric: tabular-nums;
 }
 
 .panel {

@@ -17,12 +17,17 @@
         <div class="top-bar__title">Revival Guild</div>
         <div class="top-bar__calendar" id="calendar-display">길드력 21년 04월</div>
       </div>
-      <div class="top-bar__resources">
+      <div class="top-bar__resources" title="길드 평판은 0~1000 사이로 밴드에 따라 콘텐츠가 달라집니다.">
         <span class="resource-label">💰 Gold</span>
         <span id="gold-value">0</span>
         <span class="resource-divider">·</span>
         <span class="resource-label">⭐ Reputation</span>
         <span id="reputation-value">0</span>
+        <span id="reputation-band" class="reputation-band">알려지지 않음</span>
+        <div class="reputation-debug" aria-label="평판 조정" role="group">
+          <button id="reputation-increase" class="btn btn--icon" type="button" aria-label="평판 50 상승">▲</button>
+          <button id="reputation-decrease" class="btn btn--icon" type="button" aria-label="평판 50 감소">▼</button>
+        </div>
       </div>
       <div class="top-bar__spawn-rate">현재 퀘스트 발생률: <span id="quest-spawn-rate">0%</span></div>
       <div class="top-bar__actions">
@@ -41,6 +46,7 @@
             <div class="tab-group" id="main-tabs">
               <button class="tab" data-main-tab="mercs">용병</button>
               <button class="tab is-active" data-main-tab="quests">퀘스트</button>
+              <button class="tab" data-main-tab="probability">확률표</button>
               <button class="tab" data-main-tab="codex">용병도감</button>
               <button class="tab" data-main-tab="inventory">창고</button>
               <button class="tab" data-main-tab="debug">디버그</button>
@@ -60,6 +66,43 @@
               <div id="quest-dashboard" class="quest-dashboard"></div>
               <div id="quest-list" class="quest-list">
                 <div class="empty-state">턴을 진행해 퀘스트를 생성하세요.</div>
+              </div>
+            </div>
+            <div class="tab-panel" data-tab-panel="probability">
+              <div class="tab-panel__header">
+                <h3>등장 확률표</h3>
+              </div>
+              <div id="probability-panel" class="probability-panel">
+                <div class="probability-panel__summary">
+                  <div class="probability-panel__current" title="현재 길드 평판과 밴드">
+                    <span class="probability-panel__label">현재 평판</span>
+                    <div class="probability-panel__value">
+                      <span id="probability-reputation" class="probability-panel__rep">0</span>
+                      <span id="probability-reputation-band" class="probability-panel__band">알려지지 않음</span>
+                    </div>
+                  </div>
+                  <div class="probability-panel__preview">
+                    <label for="probability-band-select">밴드 미리보기</label>
+                    <select id="probability-band-select">
+                      <option value="current">현재 밴드</option>
+                      <option value="low">알려지지 않음 (0-199)</option>
+                      <option value="mid1">지역에 알려짐 (200-499)</option>
+                      <option value="mid2">국가에 알려짐 (500-799)</option>
+                      <option value="high">대륙에 알려짐 (800-899)</option>
+                      <option value="top">전세계에 알려짐 (900-1000)</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="probability-panel__cards">
+                  <section class="probability-card" aria-labelledby="probability-quests-title" title="이 표는 현재 평판 밴드 기준의 등장 확률입니다.">
+                    <h4 id="probability-quests-title">퀘스트 등급 분포</h4>
+                    <table class="probability-table" id="probability-quests" aria-describedby="probability-quests-title"></table>
+                  </section>
+                  <section class="probability-card" aria-labelledby="probability-mercs-title" title="이 표는 현재 평판 밴드 기준의 등장 확률입니다.">
+                    <h4 id="probability-mercs-title">용병 등급 분포</h4>
+                    <table class="probability-table" id="probability-mercs" aria-describedby="probability-mercs-title"></table>
+                  </section>
+                </div>
               </div>
             </div>
             <div class="tab-panel" data-tab-panel="codex">
@@ -190,7 +233,9 @@
   <div class="board-formula" id="board-formula">
     <button id="board-formula-toggle" class="board-formula__toggle" aria-expanded="false">📌 경제·평판 공식 보기</button>
     <div id="board-formula-content" class="board-formula__content" aria-hidden="true">
-      <p>Final Reward = max(0, Gold + (Bid or Reward) + BonusGold − ΣWages)</p>
+      <p>Merc Signing = Σ(ATK+DEF+STAM) × 6.0 × randVar(±10%)</p>
+      <p>Merc Wage = Σ(ATK+DEF+STAM) × 2.0 × randVar(±10%)</p>
+      <p>Quest Reward = 40 × tierCoef × (0.75 + 0.12×Turns) × randVar(±10%)</p>
       <p>ΔRep = Base(tier) × StanceGainCoef − OverduePenalty × DifficultyWeight</p>
       <p>P(k) = softmax<sub>k</sub>( w<sub>bid</sub>·BidTerm + w<sub>stats</sub>·StatsTerm + w<sub>rep</sub>·RepTerm )</p>
       <p>1턴 = 1개월</p>
