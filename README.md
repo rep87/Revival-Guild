@@ -3,10 +3,7 @@
 ## 프로젝트 개요
 - 다키스트 던전형 경영 로그라이크: 플레이어는 길드를 운영하고, 파티는 자동으로 던전을 탐험합니다.
 - 상단 주요 액션(용병 모집/퀘스트 수주/턴 진행/새 게임)은 헤더 우측에 정렬되어 빠르게 접근할 수 있습니다.
-- Recruiting Modal: 같은 턴에 여러 번 열어도 기존 후보가 유지되며, 모집 풀 재생성은 턴당 1회만 허용됩니다.
-- Immediate Hire Effects: 고용 즉시 골드/보유 용병/용병 도감/모집 모달 목록이 갱신되어 턴 진행 없이 반영됩니다.
-- Guild View: 길드 관리 탭에서는 보유 용병만 노출하고, 퀘스트 섹션은 진행 중(`in_progress`) 퀘스트만 표시합니다.
-- Debug Toggle: 브라우저 콘솔에서 `window.__RG_DEBUG = true`로 설정하면 모집·고용·길드 뷰 렌더링 로그가 활성화됩니다.
+- Hiring is immediate (roster & codex update, recruit cards disappear at once, duplicate hires are blocked).
 - Bids resolve against rival guilds via softmax weighting with a steep overbid penalty and a single winner.
 - Formation works only for awarded quests and launches expeditions immediately after confirmation.
 - Portraits use assets/mercs/m01~m10.jpg.
