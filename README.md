@@ -2,8 +2,9 @@
 
 ## 프로젝트 개요
 - 다키스트 던전형 경영 로그라이크: 플레이어는 길드를 운영하고, 파티는 자동으로 던전을 탐험합니다.
-- Hiring is immediate (roster & codex update).
-- Formation works only for awarded quests.
+- Hiring is immediate (roster & codex update, recruit cards disappear at once, duplicate hires are blocked).
+- Bids resolve against rival guilds via softmax weighting with a steep overbid penalty and a single winner.
+- Formation works only for awarded quests and launches expeditions immediately after confirmation.
 - Portraits use assets/mercs/m01~m10.jpg.
 
 ## 빠른 시작
@@ -11,7 +12,7 @@
 - 로컬 미리보기: 저장소를 클론한 뒤 `index.html`을 브라우저로 열거나 간단한 정적 서버(`npx serve` 등)를 실행하세요.
 
 ## 조작법
-- 용병 모집: 상단의 **용병 모집** 버튼을 눌러 후보를 확인하고 고용합니다.
+- 용병 모집: 상단의 **용병 모집** 버튼을 눌러 후보를 확인하고 고용합니다. 고용 즉시 보유 목록과 도감에 반영되며, 목록에서 카드가 제거됩니다.
 - 퀘스트 입찰: 던전 퀘스트 카드에서 **입찰하기**를 눌러 추천 능력치와 낙찰 확률을 확인한 뒤 입찰가를 제출합니다.
 - 준비 단계: 낙찰 후에는 **편성하기** 버튼으로 전담 편성 모달을 열어 실제 파티와 탐험 성향을 확정합니다.
 - 턴 진행: **턴 진행** 버튼으로 시간 경과와 신규 퀘스트 생성을 처리합니다.
@@ -106,6 +107,7 @@
 ## 확률 기반 입찰 시스템
 - 기존 최저가 선착순 대신 **Softmax 기반 확률 입찰**을 도입했습니다.
 - 퀘스트 중요도(`gold`/`reputation`/`stats`)에 따라 입찰가·능력치·평판 가중치가 달라집니다.
+- 플레이어와 라이벌이 같은 모델로 경쟁하며, 추첨 결과는 단 한 길드만 낙찰됩니다.
 - 경쟁 길드의 평판(`rival.rep`)과 우리 길드 평판의 비율이 낙찰 확률에 반영됩니다.
 - 기본 보상 대비 과다 입찰(2~4배 이상)을 시도할수록 낙찰 가중치가 급격히 줄어듭니다.
 - 디버그 탭의 **확률 프리뷰** 토글(또는 URL 뒤 `?debug=1` 파라미터)을 활성화하면 입찰 제출 모달에서 `Player 42% / ...` 형식의 낙찰 확률을 확인할 수 있습니다.

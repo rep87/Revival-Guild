@@ -2221,9 +2221,50 @@ body.no-bg-asset {
   display: flex;
 }
 
+
+.recruit-section {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(221, 186, 110, 0.2);
+  background: rgba(16, 12, 8, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.recruit-section__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.recruit-section__header h4 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.recruit-section__hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+.recruit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .recruit-card {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   padding: 14px;
   border-radius: 12px;
@@ -2234,11 +2275,25 @@ body.no-bg-asset {
 .recruit-card--sold {
   opacity: 0.5;
 }
+.recruit-card--empty {
+  justify-content: center;
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
 .recruit-card__body {
   display: flex;
   flex-direction: column;
   gap: 8px;
   flex: 1;
+}
+.recruit-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+.recruit-card .txt {
+  font-weight: 600;
 }
 .recruit-card__body .btn {
   align-self: flex-start;
@@ -2248,6 +2303,52 @@ body.no-bg-asset {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+}
+
+#formation-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(10, 8, 5, 0.75);
+  z-index: 1200;
+}
+
+#formation-modal .modal-body {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: rgba(18, 14, 10, 0.92);
+  border: 1px solid rgba(221, 186, 110, 0.3);
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
+  padding: 24px;
+}
+
+#formation-modal .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.sumline {
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.chk {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+}
+
+.chk input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
 }
 
 .stance-select {
