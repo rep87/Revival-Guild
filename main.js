@@ -3,6 +3,8 @@
  * Handles state management, UI rendering, and persistence for the mini prototype.
  */
 
+window.__RG_DEBUG = true;
+
 const DEBUG_MODE = typeof window !== 'undefined' && window.location.search.includes('debug=1');
 
 const REPUTATION = {
@@ -209,7 +211,8 @@ let state = {
   inventory: createEmptyInventory(),
   meta: createDefaultMeta(),
   codex: createEmptyCodex(),
-  pool: createDefaultPools()
+  pool: createDefaultPools(),
+  pendingAssignments: {}
 };
 
 let currentRecruitCandidates = [];
@@ -1005,6 +1008,7 @@ const elements = {
   assetList: document.getElementById('missing-assets-list'),
   assetNote: document.getElementById('asset-note'),
   recruitBtn: document.getElementById('recruit-btn'),
+  recruitList: document.getElementById('recruit-list'),
   newTurnBtn: document.getElementById('new-turn-btn'),
   questSpawnRate: document.getElementById('quest-spawn-rate'),
   modalOverlay: document.getElementById('modal-overlay'),
@@ -1046,7 +1050,11 @@ const elements = {
   codexGradeFilter: document.getElementById('codex-filter-grade'),
   codexStatusFilter: document.getElementById('codex-filter-status'),
   codexTableBody: document.getElementById('codex-table-body'),
-  codexDetail: document.getElementById('codex-detail')
+  codexDetail: document.getElementById('codex-detail'),
+  formationModal: document.getElementById('formation-modal'),
+  formationMercList: document.getElementById('formation-merc-list'),
+  formationSum: document.getElementById('formation-sum'),
+  formationConfirm: document.getElementById('formation-confirm')
 };
 
 /**
@@ -1098,6 +1106,22 @@ function bindEvents() {
   }
   if (elements.resetBtn) {
     elements.resetBtn.addEventListener('click', openResetModal);
+  }
+  if (elements.recruitList) {
+    elements.recruitList.addEventListener('click', (event) => {
+      const btn = event.target?.closest('[data-action="hire"]');
+      if (!btn) {
+        return;
+      }
+      const id = btn.getAttribute('data-merc-id');
+      if (!id) {
+        return;
+      }
+      if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+        console.log('HIT:recruit-list-click', { mercId: id });
+      }
+      handleHireClick(id);
+    });
   }
   if (elements.reputationIncrease) {
     elements.reputationIncrease.addEventListener('click', () => adjustReputation(50));
@@ -1161,6 +1185,34 @@ function computeSelectedStats(mercIds) {
     totals.stam += Number(merc.stamina) || 0;
   });
   return totals;
+}
+
+function sumSelectedStats(setIds) {
+  const totals = { atk: 0, def: 0, stam: 0, total: 0 };
+  if (!(setIds instanceof Set)) {
+    return totals;
+  }
+  setIds.forEach((id) => {
+    const merc = state.mercs.find((entry) => entry.id === id);
+    if (!merc) {
+      return;
+    }
+    totals.atk += Number(merc.atk) || 0;
+    totals.def += Number(merc.def) || 0;
+    totals.stam += Number(merc.stamina || merc.stam) || 0;
+  });
+  totals.total = totals.atk + totals.def + totals.stam;
+  return totals;
+}
+
+function mapPos(r, max) {
+  const factor = Math.max(0, Math.min(1, Number(r) || 0));
+  return factor * (max || 1);
+}
+
+function mapNeg(r, max) {
+  const factor = Math.max(0, Math.min(1, -(Number(r) || 0)));
+  return factor * (max || 1);
 }
 
 function clamp01(value) {
@@ -1811,7 +1863,8 @@ function load() {
         inventory: normalizeInventory(parsed.inventory),
         meta,
         codex: normalizeCodex(parsed.codex),
-        pool: normalizePool(parsed.pool, { saveVersion: meta.saveVersion })
+        pool: normalizePool(parsed.pool, { saveVersion: meta.saveVersion }),
+        pendingAssignments: {}
       };
       currentRecruitCandidates = state.recruitPool;
       loadedFromStorage = true;
@@ -1834,7 +1887,8 @@ function load() {
       inventory: createEmptyInventory(),
       meta: createDefaultMeta(),
       codex: createEmptyCodex(),
-      pool: createDefaultPools()
+      pool: createDefaultPools(),
+      pendingAssignments: {}
     };
     currentRecruitCandidates = state.recruitPool;
     needsResave = true;
@@ -1843,6 +1897,9 @@ function load() {
   ensureMeta();
   ensureCodex();
   ensurePool();
+  if (!state.pendingAssignments || typeof state.pendingAssignments !== 'object') {
+    state.pendingAssignments = {};
+  }
   const hireHistoryChanged = initializeHireHistory();
   const previousVersion = Number.isFinite(state.meta.saveVersion) ? state.meta.saveVersion : 1;
   if (previousVersion !== SAVE_VERSION) {
@@ -2103,12 +2160,16 @@ function newTurn() {
       ensureQuestTimeline(quest);
       const { config: stanceConfig } = getStanceConfig(quest);
       const effectiveConfig = stanceConfig || CONFIG.STANCE.meticulous;
-      const currentRemaining = Number.isFinite(quest.remaining_turns) ? quest.remaining_turns : quest.turns_cost;
-      const previousProgress = Number.isFinite(quest.progress) ? quest.progress : 0;
-      quest.progress = previousProgress + 1;
-      quest.remaining_turns = Math.max(0, currentRemaining - 1);
+      const previousProgress = getQuestProgressValue(quest);
+      const currentRemaining = Number.isFinite(quest.remaining_turns)
+        ? quest.remaining_turns
+        : Math.max(0, Math.round(Number(quest.turns_cost) || 0) - previousProgress);
+      const nextCompleted = previousProgress + 1;
+      const nextRemaining = Math.max(0, currentRemaining - 1);
+      setQuestProgress(quest, nextCompleted, nextRemaining);
+      const progressValue = getQuestProgressValue(quest);
       const deadline = Number.isFinite(quest.deadline_turn) ? quest.deadline_turn : quest.turns_cost;
-      if (quest.progress > deadline) {
+      if (progressValue > deadline) {
         quest.overdue = true;
       }
       if (!Number.isFinite(quest.bonusGold)) {
@@ -2150,7 +2211,7 @@ function newTurn() {
 
       if (quest.turns_cost > 6 && !quest.campPlaced) {
         const midpoint = Math.ceil(Math.max(1, Number(quest.turns_cost)) / 2);
-        if (quest.progress >= midpoint) {
+        if (progressValue >= midpoint) {
           const campMessage = randomChoice(QUEST_TIMELINE_TEMPLATES.camp) || '야영지를 마련해 숨을 고르었습니다.';
           quest.campPlaced = true;
           fragments.push(campMessage);
@@ -2183,6 +2244,7 @@ function newTurn() {
         fragments.push(expediteMessage);
         addQuestJournalEntry(quest, expediteMessage);
         registerQuestEvent(quest, { type: 'story', text: expediteMessage, animKey: 'story', turn: state.turn });
+        setQuestProgress(quest, getQuestProgressValue(quest), quest.remaining_turns);
       }
       const delayChance = clamp01((effectiveConfig.overdueProbPerTurn || 0) + negFactor * CONFIG.PREP_BAL.delayPerUnder);
 
@@ -2205,6 +2267,7 @@ function newTurn() {
             animKey: 'story',
             turn: state.turn
           });
+          setQuestProgress(quest, getQuestProgressValue(quest), quest.remaining_turns);
         } else {
           const successBase = CONFIG.PREP_BAL.successBase;
           const successBonus = posFactor * CONFIG.PREP_BAL.successPerOver;
@@ -2607,7 +2670,11 @@ function ensureQuestSlots() {
     const storedDeadline = Number(quest.deadline_turn);
     quest.deadline_turn = Number.isFinite(storedDeadline) && storedDeadline > 0 ? storedDeadline : defaultDeadline;
     quest.overdue = Boolean(quest.overdue);
-    quest.progress = Math.max(0, Number(quest.progress) || 0);
+    const normalizedProgress = getQuestProgressValue(quest);
+    const normalizedRemaining = Number.isFinite(quest.remaining_turns)
+      ? Math.max(0, Math.round(Number(quest.remaining_turns)))
+      : Math.max(0, Math.round(defaultDeadline - normalizedProgress));
+    setQuestProgress(quest, normalizedProgress, normalizedRemaining);
     const storedBonus = Number.isFinite(quest.bonusGold) ? quest.bonusGold : quest.tempBonusGold;
     quest.bonusGold = Math.max(0, Number(storedBonus) || 0);
     if (!Array.isArray(quest.journal)) {
@@ -2834,7 +2901,7 @@ function normalizeQuest(quest, rivals = DEFAULT_RIVALS, options = {}) {
   const storedDeadline = Number(quest.deadline_turn);
   normalized.deadline_turn = Number.isFinite(storedDeadline) && storedDeadline > 0 ? storedDeadline : turns_cost;
   normalized.overdue = Boolean(quest.overdue);
-  normalized.progress = Math.max(0, Number(quest.progress) || 0);
+  normalized.progress = normalizedProgress;
   const storedBonus = Number.isFinite(quest.bonusGold) ? quest.bonusGold : quest.tempBonusGold;
   normalized.bonusGold = Math.max(0, Number(storedBonus) || 0);
   normalized.journal = Array.isArray(quest.journal) ? quest.journal.slice(-CONFIG.QUEST_JOURNAL_LIMIT) : [];
@@ -3109,7 +3176,11 @@ function createTagRow(attributes = {}, options = {}) {
  */
 function openRecruit() {
   if (CONFIG.RECRUIT_ONCE_PER_TURN && state.lastRecruitTurn === state.turn) {
+    toast('이번 턴에는 이미 모집한 용병이 있습니다.');
     log(`[T${state.turn}] 이번 턴에는 이미 용병 모집을 진행했습니다.`);
+    if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+      console.log('HIT:openRecruit-skipped', { turn: state.turn });
+    }
     return;
   }
 
@@ -3121,84 +3192,13 @@ function openRecruit() {
 
   currentRecruitCandidates = state.recruitPool;
   state.lastRecruitTurn = state.turn;
-  save();
-
-  elements.modalTitle.textContent = '용병 모집';
-  renderRecruitModalBody();
-  openModal();
-  render();
-}
-
-/** Render the recruit modal body based on current candidates. */
-function renderRecruitModalBody() {
-  resetModalRequirementSummary();
-  elements.modalBody.innerHTML = '';
-
-  const description = document.createElement('p');
-  description.textContent = '고용할 용병을 선택하세요. 계약금이 즉시 차감됩니다.';
-  description.className = 'modal-description';
-  elements.modalBody.appendChild(description);
-
-  ensureRecruitPool();
-  if (state.recruitPool.length === 0) {
-    const emptyNote = document.createElement('p');
-    emptyNote.className = 'modal-subtle';
-    emptyNote.textContent = '현재 모집 가능한 용병이 없습니다.';
-    elements.modalBody.appendChild(emptyNote);
-    return;
+  persistState();
+  renderRecruitPool();
+  refreshAssetChecklist();
+  toast('모집 목록을 갱신했습니다.');
+  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+    console.log('HIT:openRecruit', { turn: state.turn, count: state.recruitPool.length });
   }
-  state.recruitPool.forEach((candidate) => {
-    const card = document.createElement('div');
-    card.className = 'recruit-card';
-    if (candidate.hired) {
-      card.classList.add('recruit-card--sold');
-    }
-
-    const portrait = createPortraitElement(candidate);
-
-    const body = document.createElement('div');
-    body.className = 'recruit-card__body';
-
-    const header = document.createElement('div');
-    header.className = 'recruit-card__header';
-    const name = document.createElement('strong');
-    name.textContent = `${candidate.name} [${candidate.grade}]`;
-    const cost = document.createElement('span');
-    cost.textContent = `계약금 ${candidate.signing_bonus}G`;
-    header.append(name, cost);
-
-    const tagRow = createTagRow(
-      {
-        isNamed: candidate.isNamed,
-        isTownie: candidate.isTownie,
-        revisitCount: candidate.revisitCount,
-        returning: candidate.isReturning
-      },
-      { compact: true }
-    );
-
-    const stats = document.createElement('div');
-    stats.className = 'merc-card__stats';
-    stats.innerHTML = `ATK ${candidate.atk} · DEF ${candidate.def} · STAM ${candidate.stamina} · 임금 ${candidate.wage_per_quest}G`;
-
-    const hireBtn = document.createElement('button');
-    hireBtn.className = 'btn btn--accent';
-    hireBtn.textContent = candidate.hired ? 'SOLD OUT' : '고용하기';
-    hireBtn.disabled = candidate.hired;
-    if (candidate.hired) {
-      hireBtn.classList.add('btn--disabled');
-    } else {
-      hireBtn.addEventListener('click', () => handleHireClick(candidate.id));
-    }
-
-    if (tagRow) {
-      body.append(header, tagRow, stats, hireBtn);
-    } else {
-      body.append(header, stats, hireBtn);
-    }
-    card.append(portrait, body);
-    elements.modalBody.appendChild(card);
-  });
 }
 
 /**
@@ -3206,25 +3206,55 @@ function renderRecruitModalBody() {
  * @param {string} mercId
  */
 function handleHireClick(mercId) {
-  ensureRecruitPool();
-  const index = state.recruitPool.findIndex((merc) => merc && merc.id === mercId);
-  if (index === -1) {
+  if (!mercId) {
     return;
   }
-  const candidate = state.recruitPool[index];
-  if (!candidate || candidate.hired) {
+  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+    console.log('HIT:handleHireClick', { mercId });
+  }
+  const safeId = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(mercId) : mercId.replace(/"/g, '\\"');
+  const btn = document.querySelector(`[data-action="hire"][data-merc-id="${safeId}"]`);
+  const restoreBtn = () => {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '고용하기';
+    }
+  };
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '고용중...';
+  }
+
+  ensureRecruitPool();
+  if (state.mercs.some((merc) => merc && merc.id === mercId)) {
+    toast('이미 고용된 용병입니다.');
+    restoreBtn();
     return;
   }
 
-  const cost = Math.max(0, Number(candidate.signing_bonus) || 0);
+  const index = state.recruitPool.findIndex((merc) => merc && merc.id === mercId);
+  if (index < 0) {
+    toast('대상 용병을 찾을 수 없습니다.');
+    restoreBtn();
+    return;
+  }
+  const candidate = state.recruitPool[index];
+  if (!candidate) {
+    toast('용병 정보를 불러올 수 없습니다.');
+    restoreBtn();
+    return;
+  }
+
+  const cost = Math.max(0, Math.round(Number(candidate.signing_bonus ?? candidate.signing ?? candidate.signingBonus) || 0));
   if (state.gold < cost) {
     toast('골드가 부족합니다.');
     log(`[T${state.turn}] 골드가 부족하여 ${candidate.name} 용병을 고용할 수 없습니다.`);
+    restoreBtn();
     return;
   }
 
   state.gold -= cost;
-  const hiredMerc = { ...candidate };
+  const hiredMerc = { ...candidate, busy: false };
   delete hiredMerc.hired;
   assignMercPortrait(hiredMerc);
   state.mercs.push(hiredMerc);
@@ -3239,6 +3269,7 @@ function handleHireClick(mercId) {
   renderRecruitPool();
   renderCodex();
   refreshAssetChecklist();
+  toast(`${candidate.name} 고용 완료!`);
 }
 
 /**
@@ -3282,261 +3313,163 @@ function openQuestAssignModal(questId) {
 
 function openFormationModal(questId) {
   const quest = state.quests.find((entry) => entry.id === questId);
-  if (!quest) {
-    toast('선택한 퀘스트를 찾을 수 없습니다.');
+  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+    console.log('HIT:openFormationModal', { questId, status: quest?.status });
+  }
+  if (!quest || quest.status !== 'awarded') {
+    toast('편성할 수 있는 상태가 아닙니다.');
     return;
   }
-  if (quest.status !== 'awarded') {
-    toast('편성은 낙찰된 퀘스트에서만 가능합니다.');
+
+  const selectable = state.mercs.filter((merc) => !merc.busy);
+  if (selectable.length === 0) {
+    toast('가용 용병이 없습니다.');
     return;
   }
-  currentQuestId = quest.id;
-  const recommended = getQuestRecommended(quest);
-  const statOrder = ['atk', 'def', 'stam'];
-  const statLabels = { atk: 'ATK', def: 'DEF', stam: 'STAM' };
-  const draft = getTempQuestDraft(quest.id);
-  const assignedIds = Array.isArray(quest.assigned_merc_ids) ? quest.assigned_merc_ids : [];
-  const previewIds = Array.isArray(quest.preparation_preview) ? quest.preparation_preview : [];
-  const savedIds = Array.isArray(draft.mercs) ? draft.mercs : [];
-  const availableMercs = state.mercs.filter((merc) => !merc.busy);
-  const availableIds = new Set(availableMercs.map((merc) => merc.id));
-  const initialSelection = (assignedIds.length > 0 ? assignedIds : savedIds.length > 0 ? savedIds : previewIds)
-    .filter((mercId) => availableIds.has(mercId));
-  const defaultStance = draft.stance || quest.pending_stance || quest.stance || 'meticulous';
-  setTempQuestDraft(quest.id, { mercs: initialSelection, stance: defaultStance });
-  const currentDraft = getTempQuestDraft(quest.id);
 
-  elements.modalTitle.textContent = '편성 확정';
-  elements.modalBody.innerHTML = '';
+  state.pendingAssignments = state.pendingAssignments || {};
+  const existing = Array.isArray(quest.assignment)
+    ? quest.assignment
+    : Array.isArray(quest.assigned_merc_ids)
+    ? quest.assigned_merc_ids
+    : [];
+  const selected = new Set(existing);
+  state.pendingAssignments[questId] = { selected, lastOpenedTurn: state.turn };
 
-  if (elements.modalReqSummary) {
-    elements.modalReqSummary.classList.remove('hidden');
-    elements.modalReqSummary.innerHTML = '';
+  renderFormationModal(quest, selectable);
+  showModal('#formation-modal');
+}
+
+function renderFormationModal(quest, mercList) {
+  if (!quest || !elements.formationMercList) {
+    return;
   }
-  if (elements.modalReqSum) {
-    elements.modalReqSum.textContent = '선택 합계 → ';
+  const pid = quest.id;
+  const pending = state.pendingAssignments?.[pid];
+  if (!pending) {
+    return;
   }
-  if (elements.modalReqSummary && elements.modalReqSum) {
-    elements.modalReqSummary.appendChild(elements.modalReqSum);
+  const set = pending.selected;
+  const recommended = quest.recommended || { atk: 0, def: 0, stam: 0 };
+  if (elements.formationSum) {
+    elements.formationSum.dataset.recommended = `${recommended.atk}/${recommended.def}/${recommended.stam}`;
   }
 
-  const summary = document.createElement('p');
-  summary.className = 'modal-description';
-  summary.textContent = `보상 ${quest.reward}G, 소요 ${quest.turns_cost}턴`;
-  elements.modalBody.appendChild(summary);
+  const markup = mercList
+    .map((merc) => {
+      const checked = set.has(merc.id) ? 'checked' : '';
+      return `
+        <label class="chk">
+          <input type="checkbox" data-assign="${pid}" data-merc-id="${merc.id}" ${checked}>
+          ${getMercDisplayName(merc)} · ATK ${merc.atk} / DEF ${merc.def} / STAM ${merc.stamina}
+        </label>
+      `;
+    })
+    .join('');
+  elements.formationMercList.innerHTML = markup || '<p class="modal-subtle">선택할 용병이 없습니다.</p>';
+  updateFormationSum(pid);
 
-  const recommendedInfo = document.createElement('p');
-  recommendedInfo.className = 'modal-highlight req';
-  recommendedInfo.append('추천 능력치 → ');
-  const recommendedStatElements = {};
-  statOrder.forEach((stat, index) => {
-    const span = document.createElement('span');
-    span.dataset.stat = stat;
-    span.textContent = `${statLabels[stat]} ${recommended[stat] || 0}`;
-    recommendedInfo.appendChild(span);
-    recommendedStatElements[stat] = span;
-    if (index < statOrder.length - 1) {
-      recommendedInfo.append(' / ');
-    }
-  });
-  elements.modalBody.appendChild(recommendedInfo);
-
-  const note = document.createElement('p');
-  note.className = 'modal-subtle';
-  note.textContent = '추천 능력치를 초과하면 조기 완료 확률이 상승하고, 부족하면 지연·실패 위험이 커집니다.';
-  elements.modalBody.appendChild(note);
-
-  const stanceWrapper = document.createElement('div');
-  stanceWrapper.className = 'stance-select';
-  const stanceTitle = document.createElement('p');
-  stanceTitle.className = 'stance-select__title';
-  stanceTitle.textContent = '탐험 성향 선택';
-  stanceWrapper.appendChild(stanceTitle);
-
-  const stanceOptions = document.createElement('div');
-  stanceOptions.className = 'stance-select__options';
-  const stanceConfigs = [
-    {
-      value: 'meticulous',
-      label: '꼼꼼히 탐색',
-      description: '보물 탐색에 집중 (추가 보상 ↑, 기한 초과 위험 ↑)'
-    },
-    {
-      value: 'on_time',
-      label: '기한 준수',
-      description: '계획된 루트 준수 (추가 보상 ↓, 기한 초과 위험 ↓)'
-    }
-  ];
-
-  stanceConfigs.forEach((config) => {
-    const option = document.createElement('label');
-    option.className = 'stance-select__option';
-    const radio = document.createElement('input');
-    radio.type = 'radio';
-    radio.name = 'quest-stance';
-    radio.value = config.value;
-    radio.checked = currentDraft.stance === config.value;
-    radio.addEventListener('change', () => {
-      currentDraft.stance = config.value;
-      setTempQuestDraft(quest.id, currentDraft);
-      updateSelectionUI();
-    });
-    const textWrapper = document.createElement('div');
-    textWrapper.className = 'stance-select__description';
-    const label = document.createElement('strong');
-    label.textContent = config.label;
-    const description = document.createElement('span');
-    description.textContent = config.description;
-    textWrapper.append(label, description);
-    option.append(radio, textWrapper);
-    stanceOptions.appendChild(option);
-  });
-
-  stanceWrapper.appendChild(stanceOptions);
-  elements.modalBody.appendChild(stanceWrapper);
-
-  const list = document.createElement('div');
-  list.className = 'assign-list';
-
-  const sumStatElements = {};
-  if (elements.modalReqSum) {
-    statOrder.forEach((stat, index) => {
-      const span = document.createElement('span');
-      span.dataset.stat = stat;
-      span.textContent = `${statLabels[stat]} 0`;
-      elements.modalReqSum.appendChild(span);
-      sumStatElements[stat] = span;
-      if (index < statOrder.length - 1) {
-        elements.modalReqSum.append(' / ');
+  if (!elements.formationMercList.dataset.listenerBound) {
+    elements.formationMercList.addEventListener('change', (event) => {
+      const checkbox = event.target?.closest('input[type="checkbox"][data-assign]');
+      if (!checkbox) {
+        return;
       }
+      const targetQuest = checkbox.getAttribute('data-assign');
+      const mercId = checkbox.getAttribute('data-merc-id');
+      const bucket = state.pendingAssignments?.[targetQuest];
+      if (!bucket || !mercId) {
+        return;
+      }
+      if (checkbox.checked) {
+        bucket.selected.add(mercId);
+      } else {
+        bucket.selected.delete(mercId);
+      }
+      if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+        console.log('HIT:formation-select', { questId: targetQuest, mercId, selected: checkbox.checked });
+      }
+      updateFormationSum(targetQuest);
     });
+    elements.formationMercList.dataset.listenerBound = '1';
   }
 
-  availableMercs.forEach((merc) => {
-    const option = document.createElement('label');
-    option.className = 'assign-option';
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.value = merc.id;
-    input.checked = initialSelection.includes(merc.id);
-    input.addEventListener('change', updateSelectionUI);
-    const body = document.createElement('div');
-    body.className = 'assign-option__body';
-    const name = document.createElement('span');
-    name.className = 'assign-option__name';
-    name.textContent = `${getMercDisplayName(merc)} [${merc.grade}]`;
-    const stats = document.createElement('span');
-    stats.className = 'assign-option__stats';
-    stats.textContent = `ATK ${merc.atk} / DEF ${merc.def} / STAM ${merc.stamina}`;
-    body.append(name, stats);
-    option.append(input, body);
-    list.appendChild(option);
-  });
-
-  if (availableMercs.length === 0) {
-    const emptyNote = document.createElement('p');
-    emptyNote.className = 'modal-subtle';
-    emptyNote.textContent = '현재 편성 가능한 용병이 없습니다.';
-    elements.modalBody.appendChild(emptyNote);
+  if (elements.formationConfirm) {
+    elements.formationConfirm.onclick = () => confirmFormation(pid);
   }
+}
 
-  elements.modalBody.appendChild(list);
-
-  const actions = document.createElement('div');
-  actions.className = 'modal__actions';
-  const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'btn btn--primary';
-  cancelBtn.textContent = '취소';
-  cancelBtn.addEventListener('click', () => closeModal());
-
-  const confirmBtn = document.createElement('button');
-  confirmBtn.className = 'btn btn--accent';
-  confirmBtn.textContent = '편성 확정';
-
-  const updateSelectionUI = () => {
-    const selectedIds = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map((input) => input.value);
-    const selectedMercs = selectedIds
-      .map((id) => state.mercs.find((entry) => entry.id === id))
-      .filter(Boolean);
-    currentDraft.mercs = selectedIds;
-    setTempQuestDraft(quest.id, currentDraft);
-    const totals = computeSelectedStats(selectedIds);
-    statOrder.forEach((stat) => {
-      const meets = totals[stat] >= (recommended[stat] || 0);
-      const recommendedSpan = recommendedStatElements[stat];
-      if (recommendedSpan) {
-        recommendedSpan.classList.toggle('ok', meets);
-        recommendedSpan.classList.toggle('ng', !meets);
-      }
-      const sumSpan = sumStatElements[stat];
-      if (sumSpan) {
-        sumSpan.textContent = `${statLabels[stat]} ${totals[stat]}`;
-        sumSpan.classList.toggle('ok', meets);
-        sumSpan.classList.toggle('ng', !meets);
-      }
-    });
-    const hasMerc = selectedMercs.length > 0;
-    const stanceSelected = Boolean(currentDraft.stance);
-    confirmBtn.disabled = !(hasMerc && stanceSelected);
-    if (confirmBtn.disabled) {
-      confirmBtn.classList.add('btn--disabled');
-      confirmBtn.title = !hasMerc ? '최소 한 명의 용병을 선택해야 합니다.' : '탐험 성향을 선택하세요.';
-    } else {
-      confirmBtn.classList.remove('btn--disabled');
-      confirmBtn.title = '';
-    }
-  };
-
-  confirmBtn.addEventListener('click', () => {
-    const selectedIds = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map((input) => input.value);
-    currentDraft.mercs = selectedIds;
-    setTempQuestDraft(quest.id, currentDraft);
-    confirmFormation(quest.id);
-  });
-
-  actions.append(cancelBtn, confirmBtn);
-  elements.modalBody.appendChild(actions);
-
-  updateSelectionUI();
-  openModal();
+function updateFormationSum(questId) {
+  if (!elements.formationSum) {
+    return;
+  }
+  const pending = state.pendingAssignments?.[questId];
+  if (!pending) {
+    elements.formationSum.textContent = '선택된 용병이 없습니다.';
+    return;
+  }
+  const totals = sumSelectedStats(pending.selected);
+  const quest = state.quests.find((entry) => entry.id === questId);
+  const rec = quest?.recommended || { atk: 0, def: 0, stam: 0 };
+  elements.formationSum.textContent = `선택 합계 ATK ${totals.atk} / DEF ${totals.def} / STAM ${totals.stam}  (추천: ${rec.atk}/${rec.def}/${rec.stam})`;
+  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+    console.log('HIT:updateFormationSum', { questId, totals });
+  }
 }
 
 function confirmFormation(questId) {
+  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+    console.log('HIT:confirmFormation', { questId });
+  }
+  const pending = state.pendingAssignments?.[questId];
+  if (!pending || !(pending.selected instanceof Set) || pending.selected.size === 0) {
+    toast('용병을 선택하세요.');
+    return;
+  }
   const quest = state.quests.find((entry) => entry.id === questId);
   if (!quest) {
     toast('선택한 퀘스트를 찾을 수 없습니다.');
     return;
   }
   if (quest.status !== 'awarded') {
-    toast('편성은 낙찰된 퀘스트에서만 가능합니다.');
+    toast('편성할 수 있는 상태가 아닙니다.');
     return;
   }
-  const draft = getTempQuestDraft(quest.id);
-  const selectedIds = Array.isArray(draft.mercs)
-    ? draft.mercs.filter((id) => typeof id === 'string')
-    : [];
-  if (selectedIds.length === 0) {
-    toast('배치할 용병을 선택하세요.');
-    return;
-  }
+
+  const selectedIds = Array.from(pending.selected);
   const assignedMercs = selectedIds
     .map((id) => state.mercs.find((merc) => merc.id === id && !merc.busy))
     .filter(Boolean);
   if (assignedMercs.length === 0) {
-    toast('배치할 용병을 선택하세요.');
+    toast('용병을 선택하세요.');
     return;
   }
-  if (!draft.stance && !quest.pending_stance && !quest.stance) {
-    toast('탐험 성향을 선택하세요.');
-    return;
-  }
-  const stance = draft.stance || quest.pending_stance || quest.stance || 'meticulous';
+
+  const totals = sumSelectedStats(pending.selected);
+  const rec = quest.recommended || { atk: 0, def: 0, stam: 0 };
+  const recTotal = Math.max(1, (rec.atk || 0) + (rec.def || 0) + (rec.stam || 0));
+  const overRatio = clamp((totals.total - recTotal) / recTotal, -0.6, 1.2);
+
+  const stance = quest.pending_stance || quest.stance || 'meticulous';
   startQuestDeployment(quest, assignedMercs, stance);
+  quest.assignment = selectedIds.slice();
+  quest.assigned_merc_ids = selectedIds.slice();
+  quest.successBias = CONFIG.PREP_BAL.successBase + mapPos(overRatio, CONFIG.PREP_BAL.successPerOver);
+  quest.delayPenalty = mapNeg(overRatio, CONFIG.PREP_BAL.delayPerUnder);
+  quest.expediteProb = mapPos(overRatio, CONFIG.PREP_BAL.expeditePerOver);
+  setQuestProgress(quest, 0, quest.turns_cost);
+
+  assignedMercs.forEach((merc) => {
+    merc.busy = true;
+  });
+
+  delete state.pendingAssignments[questId];
   persistState();
+  hideModal('#formation-modal');
   renderQuests();
   renderMercenaryList();
   refreshAssetChecklist();
-  closeModal();
+  toast('파견을 시작했습니다.');
 }
 
 function startQuestDeployment(quest, assignedMercs, stance) {
@@ -3552,9 +3485,7 @@ function startQuestDeployment(quest, assignedMercs, stance) {
   quest.pending_stance = null;
   quest.preparation_preview = mercIds.slice();
   quest.preparationResult = { expediteTurns: 0, delayTurns: 0, ratio: 0, outcome: 'pending' };
-  quest.remaining_turns = quest.turns_cost;
   quest.remaining_visible_turns = 0;
-  quest.progress = 0;
   quest.deadline_turn = Math.max(1, Number(quest.turns_cost) || CONFIG.QUEST_TURNS_MIN);
   quest.started_turn = state.turn;
   quest.overdue = false;
@@ -3564,6 +3495,7 @@ function startQuestDeployment(quest, assignedMercs, stance) {
   quest.campPlaced = false;
   quest.journal = Array.isArray(quest.journal) ? quest.journal.slice(-CONFIG.QUEST_JOURNAL_LIMIT) : [];
   ensureQuestTimeline(quest);
+  setQuestProgress(quest, 0, quest.turns_cost);
 
   assignedMercs.forEach((merc) => {
     if (merc) {
@@ -3884,129 +3816,189 @@ function openBidModal(quest) {
 }
 
 function calculateContractProbabilities(quest, playerBid, assignedMercs) {
-  const rivalEntries = Array.isArray(quest.bids?.rivals) ? quest.bids.rivals : [];
-  const rivalState = Array.isArray(state.rivals) && state.rivals.length > 0 ? state.rivals : DEFAULT_RIVALS;
-  const rivalMap = new Map(rivalState.map((rival) => [rival.id, rival]));
-
-  const participants = [];
-  const sanitizedBid = clamp(Math.round(playerBid), 1, 9999);
-  participants.push({
-    key: 'player',
-    type: 'player',
-    id: 'player',
-    value: sanitizedBid,
-    rep: clampRep(state.reputation, REPUTATION.MIN)
-  });
-
-  rivalEntries.forEach((entry) => {
-    const rival = rivalMap.get(entry.id) || { id: entry.id, rep: REPUTATION.MIN };
-    participants.push({
-      key: entry.id,
-      type: 'rival',
-      id: entry.id,
-      value: clamp(Math.round(entry.value), 1, 9999),
-      rep: clampRep(rival.rep, REPUTATION.MIN)
-    });
-  });
-
-  const bids = participants.map((participant) => participant.value);
-  const minBid = bids.length > 0 ? Math.min(...bids) : 0;
-  const maxBid = bids.length > 0 ? Math.max(...bids) : 0;
-  const rewardBase = Math.max(1, Number(quest.reward) || 1);
-  const weights = CONFIG.WEIGHTS_BY_IMPORTANCE[quest.importance] || CONFIG.WEIGHTS_BY_IMPORTANCE.gold;
-
-  const rivalParticipants = participants.filter((participant) => participant.type === 'rival');
-  const avgRivalRep = rivalParticipants.length > 0
-    ? rivalParticipants.reduce((sum, participant) => sum + (participant.rep || 0), 0) / rivalParticipants.length
-    : clampRep(REPUTATION.MIN);
-
-  const statsTerm = computePlayerStatsTerm(assignedMercs, quest);
-  const playerRepTerm = computePlayerRepTerm(avgRivalRep);
-
-  participants.forEach((participant) => {
-    const bidTerm = computeBidAdvantage(participant.value, minBid, maxBid, rewardBase);
-    const statsScore = participant.type === 'player' ? statsTerm : 0;
-    const repTerm = participant.type === 'player'
-      ? playerRepTerm
-      : computeRivalRepTerm(participant.rep);
-    participant.score = weights.bid * bidTerm + weights.stats * statsScore + weights.rep * repTerm;
-  });
-
-  const temperature = Number(CONFIG.BID_TEMP) || 1;
-  const exponentials = participants.map((participant) => Math.exp(participant.score / temperature));
-  const sumExp = exponentials.reduce((sum, value) => sum + value, 0) || 1;
-  const probabilities = {};
-  participants.forEach((participant, index) => {
-    probabilities[participant.key] = exponentials[index] / sumExp;
-  });
-
-  return { participants, probabilities };
+  const { context, probabilities } = getBidResolutionContext(quest, playerBid, assignedMercs);
+  return { participants: context.participants, probabilities };
 }
 
 function resolveBidOutcome(quest, playerBid, assignedMercs) {
-  const calculation = calculateContractProbabilities(quest, playerBid, assignedMercs);
-  const winnerKey = sampleFromProbabilities(calculation.participants, calculation.probabilities);
-  const winner = calculation.participants.find((participant) => participant.key === winnerKey)
-    || calculation.participants[0];
-  return { winner, probabilities: calculation.probabilities };
+  const { sanitizedBid, context, result, probabilities } = getBidResolutionContext(quest, playerBid, assignedMercs);
+  const winnerKey = result.winner?.key || result.winner?.id || (result.winner?.who === 'player' ? 'player' : null);
+  const participant = context.participants.find((entry) => entry.key === winnerKey) || context.participants[0];
+  const normalizedWinner = winnerKey === 'player'
+    ? { type: 'player', id: 'player', value: sanitizedBid }
+    : {
+        type: 'rival',
+        id: participant?.id || winnerKey,
+        value: participant?.value || result.winner?.bidGold
+      };
+  return { winner: normalizedWinner, probabilities };
 }
 
-function sampleFromProbabilities(participants, probabilities) {
-  if (!Array.isArray(participants) || participants.length === 0) {
-    return null;
-  }
-  const randomValue = Math.random();
-  let cumulative = 0;
-  for (const participant of participants) {
-    const probability = Number(probabilities?.[participant.key]) || 0;
-    cumulative += probability;
-    if (randomValue <= cumulative) {
-      return participant.key;
-    }
-  }
-  return participants[participants.length - 1].key;
+function getBidResolutionContext(quest, playerBid, assignedMercs) {
+  const sanitizedBid = clamp(Math.round(playerBid), 1, 9999);
+  const context = buildBidContext(quest, sanitizedBid, assignedMercs);
+  const result = resolveBids(quest, context.player, context.rivals);
+  const probabilities = {};
+  context.participants.forEach((participant) => {
+    const key = participant.key;
+    const entry = result.probs.find((item) => (item.key || item.id || item.who) === key);
+    probabilities[key] = entry ? entry.p : 0;
+  });
+  return { sanitizedBid, context, result, probabilities };
 }
 
-function computeBidAdvantage(value, min, max, reward) {
-  if (!Number.isFinite(value) || !Number.isFinite(reward) || reward <= 0) {
+function buildBidContext(quest, bidValue, assignedMercs) {
+  const playerEntry = {
+    who: 'player',
+    key: 'player',
+    id: 'player',
+    bidGold: bidValue,
+    feasHint: clamp(computeFeasibilityHint(quest, assignedMercs), 0, 1),
+    rep: normalizeReputationScore(state.reputation)
+  };
+
+  const rivalEntries = [];
+  const rivalState = Array.isArray(state.rivals) && state.rivals.length > 0 ? state.rivals : DEFAULT_RIVALS;
+  const rivalMap = new Map(rivalState.map((rival) => [rival.id, rival]));
+  if (Array.isArray(quest.bids?.rivals)) {
+    quest.bids.rivals.forEach((entry, index) => {
+      const rival = rivalMap.get(entry.id) || { id: entry.id, rep: REPUTATION.MIN };
+      const key = entry.id || `r${index + 1}`;
+      rivalEntries.push({
+        who: `r${index + 1}`,
+        key,
+        id: entry.id || key,
+        bidGold: clamp(Math.round(entry.value), 1, 9999),
+        rep: normalizeReputationScore(rival.rep),
+        feasHint: clamp(0.4 + normalizeReputationScore(rival.rep) * 0.5, 0, 1)
+      });
+    });
+  }
+
+  const participants = [
+    { key: playerEntry.key, type: 'player', id: 'player', value: playerEntry.bidGold, rep: playerEntry.rep, feasHint: playerEntry.feasHint }
+  ];
+  rivalEntries.forEach((entry) => {
+    participants.push({
+      key: entry.key,
+      type: 'rival',
+      id: entry.id,
+      value: entry.bidGold,
+      rep: entry.rep,
+      feasHint: entry.feasHint
+    });
+  });
+
+  return { player: playerEntry, rivals: rivalEntries, participants };
+}
+
+function computeFeasibilityHint(quest, assignedMercs) {
+  if (!quest) {
     return 0;
   }
-  const range = Math.max(1, max - min);
-  const baseAdvantage = max === min ? 0.5 : clamp((max - value) / range, 0, 1);
-  const overbid = Math.max(0.01, value / reward);
-  const penalty = clamp(1 / Math.pow(overbid, 1.5), 0, 1);
-  return clamp(baseAdvantage * penalty, 0, 1);
-}
+  const recommended = getQuestRecommended(quest);
+  const recTotal = Math.max(1, (recommended.atk || 0) + (recommended.def || 0) + (recommended.stam || 0));
+  let sum = 0;
 
-function computePlayerStatsTerm(assignedMercs, quest) {
-  let totals = { atk: 0, def: 0, stam: 0 };
   if (Array.isArray(assignedMercs) && assignedMercs.length > 0) {
     assignedMercs.forEach((merc) => {
-      totals.atk += Number(merc.atk) || 0;
-      totals.def += Number(merc.def) || 0;
-      totals.stam += Number(merc.stamina) || 0;
+      if (!merc) {
+        return;
+      }
+      sum += (Number(merc.atk) || 0) + (Number(merc.def) || 0) + (Number(merc.stamina || merc.stam) || 0);
     });
-  } else if (quest) {
-    totals = getQuestAssignedTotals(quest);
+  } else if (Array.isArray(quest.preparation_preview) && quest.preparation_preview.length > 0) {
+    const totals = computeSelectedStats(quest.preparation_preview);
+    sum += (totals.atk || 0) + (totals.def || 0) + (totals.stam || 0);
+  } else if (Array.isArray(quest.assigned_merc_ids) && quest.assigned_merc_ids.length > 0) {
+    const totals = computeSelectedStats(quest.assigned_merc_ids);
+    sum += (totals.atk || 0) + (totals.def || 0) + (totals.stam || 0);
   }
-  const recommendedTotal = getQuestRecommendedTotal(quest);
-  const suppliedTotal = (totals.atk || 0) + (totals.def || 0) + (totals.stam || 0);
-  const ratio = (suppliedTotal - recommendedTotal) / recommendedTotal;
-  return clamp(ratio, 0, 1);
+
+  return clamp(sum / recTotal, 0, 1);
 }
 
-function computePlayerRepTerm(avgRivalRep) {
-  const ourRep = clampRep(state.reputation, REPUTATION.MIN);
-  const baseline = Math.max(1, Number(avgRivalRep) || 1);
-  const value = (ourRep / baseline) * 0.5 + 0.5;
-  return clamp(value, 0, 1);
+function normalizeReputationScore(value) {
+  const span = Math.max(1, REPUTATION.MAX - REPUTATION.MIN);
+  const clamped = clampRep(value, REPUTATION.MIN);
+  return clamp((clamped - REPUTATION.MIN) / span, 0, 1);
 }
 
-function computeRivalRepTerm(rivalRep) {
-  const ourRep = clampRep(state.reputation, REPUTATION.MIN);
-  const baseline = Math.max(1, ourRep || 1);
-  const value = (clampRep(rivalRep, REPUTATION.MIN) / baseline) * 0.5 + 0.5;
-  return clamp(value, 0, 1);
+function resolveBids(quest, playerBid, rivalBids) {
+  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+    console.log('HIT:resolveBids', {
+      questId: quest?.id,
+      playerBid,
+      rivalCount: Array.isArray(rivalBids) ? rivalBids.length : 0
+    });
+  }
+  const entries = [{ who: 'player', key: 'player', ...playerBid }].concat(
+    Array.isArray(rivalBids)
+      ? rivalBids.map((r, index) => ({ who: `r${index + 1}`, key: r.key || r.id || `r${index + 1}`, ...r }))
+      : []
+  );
+
+  const base = quest?.rewardEstimated || quest?.reward || 100;
+  const kPrice = 4.0;
+  const kFeas = 1.2;
+  const kRep = 0.8;
+
+  const scores = entries.map((entry) => {
+    const priceRatio = Math.max(0.1, base / Math.max(1, Number(entry.bidGold) || 1));
+    const priceTerm = Math.pow(priceRatio, kPrice);
+    const feas = clamp(Number(entry.feasHint) || 0, 0, 1);
+    const rep = clamp(Number(entry.rep) || 0, 0, 1);
+    const s = Math.log(priceTerm + 1e-6) + kFeas * feas + kRep * rep;
+    return { ...entry, priceTerm, s };
+  });
+
+  const maxS = Math.max(...scores.map((x) => x.s));
+  const exps = scores.map((x) => ({ ...x, w: Math.exp(x.s - maxS) }));
+  const Z = exps.reduce((sum, x) => sum + x.w, 0) || 1;
+  const probs = exps.map((x) => ({ ...x, p: x.w / Z }));
+
+  const randomValue = Math.random();
+  let cumulative = 0;
+  let winner = probs[0];
+  for (const entry of probs) {
+    cumulative += entry.p;
+    if (randomValue <= cumulative) {
+      winner = entry;
+      break;
+    }
+  }
+
+  return { winner, probs };
+}
+
+function setQuestProgress(quest, completed, turnsRemaining) {
+  if (!quest) {
+    return;
+  }
+  const completedSafe = Number.isFinite(completed) ? Math.max(0, Math.round(completed)) : 0;
+  const remainingSafe = Number.isFinite(turnsRemaining) ? Math.max(0, Math.round(turnsRemaining)) : 0;
+  quest.progress = { completed: completedSafe, turnsRemaining: remainingSafe };
+  quest.remaining_turns = remainingSafe;
+}
+
+function getQuestProgressValue(quest) {
+  if (!quest) {
+    return 0;
+  }
+  const progress = quest.progress;
+  if (progress && typeof progress === 'object') {
+    const completed = Number(progress.completed);
+    if (Number.isFinite(completed)) {
+      return Math.max(0, completed);
+    }
+    const turns = Number(quest.turns_cost);
+    const remaining = Number(progress.turnsRemaining);
+    if (Number.isFinite(turns) && Number.isFinite(remaining)) {
+      return Math.max(0, turns - remaining);
+    }
+    return 0;
+  }
+  return Math.max(0, Number(progress) || 0);
 }
 
 function buildBidLogMessage(quest, playerBid, winner, probabilities) {
@@ -4040,7 +4032,6 @@ function enterQuestPreparation(quest, previewMercs, stance, playerBid, probabili
   quest.preparationResult = { expediteTurns: 0, delayTurns: 0, ratio: 0, outcome: 'pending' };
   quest.remaining_turns = quest.turns_cost;
   quest.remaining_visible_turns = 0;
-  quest.progress = 0;
   quest.deadline_turn = Math.max(1, Number(quest.turns_cost) || CONFIG.QUEST_TURNS_MIN);
   quest.overdue = false;
   quest.bonusGold = 0;
@@ -4051,6 +4042,7 @@ function enterQuestPreparation(quest, previewMercs, stance, playerBid, probabili
   quest.events = [];
   quest.animKeyTimeline = [];
   quest.campPlaced = false;
+  setQuestProgress(quest, 0, quest.turns_cost);
 
   addQuestJournalEntry(quest, '낙찰 완료: 편성 준비 단계에 들어갑니다.');
   log(`[T${state.turn}] 퀘스트 ${quest.id} 낙찰: ${playerBid}G, 준비 단계에서 실제 편성을 확정하세요.`);
@@ -4147,7 +4139,6 @@ function openQuestCompletionReportModal(reports) {
 
 function markQuestBidFailure(quest, winner, probabilities) {
   quest.status = 'bid_failed';
-  quest.remaining_turns = 0;
   quest.assigned_merc_ids = [];
   delete quest.started_turn;
   quest.bids.winner = { type: 'rival', id: winner.id, value: winner.value };
@@ -4156,11 +4147,11 @@ function markQuestBidFailure(quest, winner, probabilities) {
   quest.stance = null;
   quest.deadline_turn = quest.turns_cost || CONFIG.QUEST_TURNS_MIN;
   quest.overdue = false;
-  quest.progress = 0;
   quest.bonusGold = 0;
   quest.contractProb = normalizeContractProb(probabilities, quest.bids, state.rivals);
   quest.journal = [];
   clearTempQuestDraft(quest.id);
+  setQuestProgress(quest, 0, 0);
 }
 
 function deleteQuest(index) {
@@ -4208,13 +4199,37 @@ function renderMercenaryList() {
 }
 
 function renderRecruitPool() {
-  if (
-    elements.modalOverlay
-    && !elements.modalOverlay.classList.contains('hidden')
-    && elements.modalTitle.textContent.includes('용병 모집')
-  ) {
-    renderRecruitModalBody();
+  const list = elements.recruitList;
+  if (!list) {
+    return;
   }
+  ensureRecruitPool();
+  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+    console.log('HIT:renderRecruitPool', { count: state.recruitPool.length });
+  }
+  if (!Array.isArray(state.recruitPool) || state.recruitPool.length === 0) {
+    list.innerHTML = '<li class="recruit-card recruit-card--empty">현재 모집 가능한 용병이 없습니다.</li>';
+    return;
+  }
+
+  const markup = state.recruitPool
+    .map((merc) => {
+      const portrait = getMercPortraitPath(merc) || 'assets/mercs/m01.jpg';
+      const signing = Math.max(0, Math.round(Number(merc.signing_bonus ?? merc.signing ?? merc.signingBonus) || 0));
+      const grade = merc.grade || 'C';
+      const name = merc.name || '용병';
+      return `
+        <li class="recruit-card" id="recruit-${merc.id}">
+          <div class="recruit-info">
+            <div class="portrait"><img src="${portrait}" alt="${name}"></div>
+            <div class="txt">${name} [${grade}] · 계약금 ${signing}G</div>
+          </div>
+          <button class="btn btn--accent hire" data-action="hire" data-merc-id="${merc.id}">고용하기</button>
+        </li>
+      `;
+    })
+    .join('');
+  list.innerHTML = markup;
 }
 
 function toast(message, options = {}) {
@@ -4263,6 +4278,7 @@ function render() {
   elements.recruitBtn.disabled = recruitLocked;
   elements.recruitBtn.title = recruitLocked ? '이번 턴에는 이미 용병을 모집했습니다.' : '';
   renderMercs();
+  renderRecruitPool();
   renderQuestDashboard();
   renderQuests();
   renderCodex();
@@ -5128,7 +5144,7 @@ function renderQuestDashboard() {
     const progressFill = document.createElement('div');
     progressFill.className = 'quest-dashboard__progress-fill';
     const plannedTurns = Math.max(1, Number(quest.turns_cost) || 1);
-    const progressValue = Math.max(0, Number(quest.progress) || 0);
+    const progressValue = getQuestProgressValue(quest);
     const progressPercent = Math.max(0, Math.min(100, (progressValue / plannedTurns) * 100));
     progressFill.style.width = `${progressPercent}%`;
     progressBar.appendChild(progressFill);
@@ -5368,7 +5384,7 @@ function renderQuests() {
     const progressFill = document.createElement('div');
     progressFill.className = 'progress-bar__fill';
     const plannedTurns = Math.max(1, Number(quest.turns_cost) || 1);
-    const currentProgress = Math.max(0, Number(quest.progress) || 0);
+    const currentProgress = getQuestProgressValue(quest);
     const clampedProgress = Math.min(currentProgress, plannedTurns);
     const progressPercent = Math.max(0, Math.min(100, (clampedProgress / plannedTurns) * 100));
     progressFill.style.width = `${progressPercent}%`;
@@ -5784,6 +5800,30 @@ function renderBoardFormulaState(forcedState) {
 /**
  * Close the currently active modal.
  */
+function showModal(selector) {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  const node = document.querySelector(selector);
+  if (!node) {
+    return;
+  }
+  node.classList.remove('hidden');
+  node.setAttribute('aria-hidden', 'false');
+}
+
+function hideModal(selector) {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  const node = document.querySelector(selector);
+  if (!node) {
+    return;
+  }
+  node.classList.add('hidden');
+  node.setAttribute('aria-hidden', 'true');
+}
+
 function closeModal() {
   elements.modalOverlay.classList.add('hidden');
   elements.modalBody.innerHTML = '';
@@ -5791,9 +5831,6 @@ function closeModal() {
   currentQuestId = null;
 }
 
-/**
- * Open the modal overlay.
- */
 function openModal() {
   elements.modalOverlay.classList.remove('hidden');
 }

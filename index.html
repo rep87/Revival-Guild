@@ -58,6 +58,13 @@
                 <h3>고용된 용병</h3>
               </div>
               <div id="merc-list" class="merc-list empty-state">아직 고용된 용병이 없습니다.</div>
+              <section class="recruit-section">
+                <div class="recruit-section__header">
+                  <h4>모집 중 용병</h4>
+                  <p class="recruit-section__hint">“용병 모집” 버튼으로 목록을 갱신하세요.</p>
+                </div>
+                <ul id="recruit-list" class="recruit-list"></ul>
+              </section>
             </div>
             <div class="tab-panel is-active" data-tab-panel="quests">
               <div class="tab-panel__header">
@@ -243,6 +250,18 @@
   </div>
 
   <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <div id="formation-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-body">
+      <h3>편성하기</h3>
+      <div id="formation-merc-list"></div>
+      <div id="formation-sum" class="sumline"></div>
+      <div class="actions">
+        <button class="btn" id="formation-confirm">파견 시작</button>
+        <button class="btn btn--ghost" type="button" onclick="hideModal('#formation-modal')">취소</button>
+      </div>
+    </div>
+  </div>
 
   <script src="main.js"></script>
 </body>
