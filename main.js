@@ -28,6 +28,7 @@ const CONFIG = {
   MERC_SIGN_MAX: 120,
   MERC_WAGE_MIN: 5,
   MERC_WAGE_MAX: 40,
+  MERC_STAT_BONUS: 10,
   STAT_MIN: 1,
   STAT_MAX: 10,
   QUEST_SLOTS: 3,
@@ -1008,6 +1009,7 @@ const elements = {
   assetList: document.getElementById('missing-assets-list'),
   assetNote: document.getElementById('asset-note'),
   recruitBtn: document.getElementById('recruit-btn'),
+  questBidBtn: document.getElementById('quest-bid-btn'),
   recruitList: document.getElementById('recruit-list'),
   newTurnBtn: document.getElementById('new-turn-btn'),
   questSpawnRate: document.getElementById('quest-spawn-rate'),
@@ -1096,6 +1098,9 @@ document.addEventListener('DOMContentLoaded', init);
  */
 function bindEvents() {
   elements.recruitBtn.addEventListener('click', () => openRecruit());
+  if (elements.questBidBtn) {
+    elements.questBidBtn.addEventListener('click', openQuestBidSelector);
+  }
   elements.newTurnBtn.addEventListener('click', () => newTurn());
   elements.modalClose.addEventListener('click', closeModal);
   if (elements.formulaToggle) {
@@ -1107,10 +1112,13 @@ function bindEvents() {
   if (elements.resetBtn) {
     elements.resetBtn.addEventListener('click', openResetModal);
   }
-  if (elements.recruitList) {
-    elements.recruitList.addEventListener('click', (event) => {
-      const btn = event.target?.closest('[data-action="hire"]');
+  if (elements.modalBody) {
+    elements.modalBody.addEventListener('click', (event) => {
+      const btn = event.target?.closest('[data-modal-action="hire"]');
       if (!btn) {
+        return;
+      }
+      if (elements.modalBody.dataset.modalType !== 'recruit') {
         return;
       }
       const id = btn.getAttribute('data-merc-id');
@@ -1118,7 +1126,7 @@ function bindEvents() {
         return;
       }
       if (typeof window !== 'undefined' && window.__RG_DEBUG) {
-        console.log('HIT:recruit-list-click', { mercId: id });
+        console.log('HIT:recruit-modal-hire-click', { mercId: id });
       }
       handleHireClick(id);
     });
@@ -3194,11 +3202,131 @@ function openRecruit() {
   state.lastRecruitTurn = state.turn;
   persistState();
   renderRecruitPool();
+  showRecruitModal();
   refreshAssetChecklist();
   toast('모집 목록을 갱신했습니다.');
   if (typeof window !== 'undefined' && window.__RG_DEBUG) {
     console.log('HIT:openRecruit', { turn: state.turn, count: state.recruitPool.length });
   }
+}
+
+function showRecruitModal() {
+  resetModalRequirementSummary();
+  if (!elements.modalBody) {
+    return;
+  }
+  elements.modalBody.dataset.modalType = 'recruit';
+  elements.modalTitle.textContent = '용병 모집소';
+  elements.modalBody.innerHTML = '';
+
+  const layout = document.createElement('div');
+  layout.className = 'recruit-modal';
+
+  const description = document.createElement('p');
+  description.className = 'modal-description';
+  description.textContent = '고용할 용병을 선택하세요. 고용 즉시 골드가 차감되고 목록에서 제거됩니다.';
+  layout.appendChild(description);
+
+  const list = document.createElement('ul');
+  list.id = 'recruit-modal-list';
+  list.className = 'recruit-modal__list';
+  layout.appendChild(list);
+
+  const note = document.createElement('p');
+  note.className = 'modal-subtle';
+  note.textContent = '같은 용병을 중복 고용할 수 없으며, 고용 시 도감과 보유 목록이 즉시 갱신됩니다.';
+  layout.appendChild(note);
+
+  elements.modalBody.appendChild(layout);
+  renderRecruitModalList();
+  openModal();
+}
+
+function openQuestBidSelector() {
+  resetModalRequirementSummary();
+  if (!elements.modalBody) {
+    return;
+  }
+  elements.modalBody.dataset.modalType = 'quest-selector';
+  elements.modalTitle.textContent = '퀘스트 수주';
+  elements.modalBody.innerHTML = '';
+
+  const layout = document.createElement('div');
+  layout.className = 'quest-select';
+
+  const description = document.createElement('p');
+  description.className = 'modal-description';
+  description.textContent = '입찰할 퀘스트를 선택하세요. 추천 능력치를 확인한 뒤 수주를 진행할 수 있습니다.';
+  layout.appendChild(description);
+
+  const list = document.createElement('div');
+  list.className = 'quest-select__list';
+  layout.appendChild(list);
+
+  const readyQuests = (Array.isArray(state.quests) ? state.quests : [])
+    .filter((quest) => quest && !quest.deleted && quest.status === 'ready');
+
+  if (readyQuests.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'quest-select__empty';
+    empty.textContent = '입찰 가능한 퀘스트가 없습니다. 턴을 진행해 새 퀘스트를 찾아보세요.';
+    list.appendChild(empty);
+  } else {
+    readyQuests.forEach((quest) => {
+      const card = document.createElement('article');
+      card.className = 'quest-select__card';
+
+      const header = document.createElement('div');
+      header.className = 'quest-select__header';
+
+      const title = document.createElement('h4');
+      title.className = 'quest-select__title';
+      title.textContent = getQuestDisplayTitle(quest);
+      header.appendChild(title);
+
+      const badge = document.createElement('span');
+      badge.className = 'quest-select__badge';
+      const questType = quest.type || '던전';
+      badge.textContent = `${quest.tier || 'C'}급 · ${questType}`;
+      header.appendChild(badge);
+
+      card.appendChild(header);
+
+      const reward = document.createElement('div');
+      reward.className = 'quest-select__reward';
+      const rewardValue = Math.max(0, Math.round(Number(quest.reward) || 0));
+      reward.textContent = `기본 보상 ${rewardValue}G`;
+      card.appendChild(reward);
+
+      const recommended = getQuestRecommended(quest);
+      const stats = document.createElement('div');
+      stats.className = 'quest-select__stats';
+      stats.textContent = `추천 ATK ${recommended.atk} / DEF ${recommended.def} / STAM ${recommended.stam}`;
+      card.appendChild(stats);
+
+      const info = document.createElement('div');
+      info.className = 'quest-select__info';
+      const remaining = Math.max(0, Number(quest.remaining_visible_turns) || 0);
+      const importance = formatImportanceLabel(quest.importance);
+      info.textContent = `만료까지 ${remaining}턴 · 중요도 ${importance}`;
+      card.appendChild(info);
+
+      const actions = document.createElement('div');
+      actions.className = 'quest-select__actions';
+      const bidBtn = document.createElement('button');
+      bidBtn.type = 'button';
+      bidBtn.className = 'btn btn--primary';
+      bidBtn.textContent = '입찰하기';
+      bidBtn.addEventListener('click', () => openBidModal(quest));
+      actions.appendChild(bidBtn);
+      card.appendChild(actions);
+
+      list.appendChild(card);
+    });
+  }
+
+  elements.modalBody.appendChild(layout);
+  openModal();
 }
 
 /**
@@ -3267,6 +3395,7 @@ function handleHireClick(mercId) {
   renderGold();
   renderMercenaryList();
   renderRecruitPool();
+  renderRecruitModalList();
   renderCodex();
   refreshAssetChecklist();
   toast(`${candidate.name} 고용 완료!`);
@@ -3304,7 +3433,7 @@ function openQuestAssignModal(questId) {
   }
 
   if (quest.status === 'ready') {
-    openBidModal(quest);
+    toast('상단 “퀘스트 수주” 버튼을 사용해 입찰을 진행하세요.');
     return;
   }
 
@@ -3515,6 +3644,9 @@ function startQuestDeployment(quest, assignedMercs, stance) {
 
 function openBidModal(quest) {
   resetModalRequirementSummary();
+  if (elements.modalBody) {
+    elements.modalBody.dataset.modalType = 'quest-bid';
+  }
   if (!quest.bids) {
     quest.bids = generateQuestBids(quest.reward);
   } else {
@@ -4198,38 +4330,84 @@ function renderMercenaryList() {
   renderMercs();
 }
 
+function buildRecruitCardMarkup(merc, options = {}) {
+  if (!merc || typeof merc !== 'object') {
+    return '';
+  }
+  const interactive = Boolean(options.interactive);
+  const portrait = getMercPortraitPath(merc) || 'assets/mercs/m01.jpg';
+  const signing = Math.max(0, Math.round(Number(merc.signing_bonus ?? merc.signing ?? merc.signingBonus) || 0));
+  const wage = Math.max(0, Math.round(Number(merc.wage_per_quest ?? merc.wagePerQuest ?? merc.wage) || 0));
+  const grade = merc.grade || 'C';
+  const name = merc.name || '용병';
+  const atk = Math.max(0, Math.round(Number(merc.atk) || 0));
+  const def = Math.max(0, Math.round(Number(merc.def) || 0));
+  const stamina = Math.max(0, Math.round(Number(merc.stamina ?? merc.stam) || 0));
+  const statsLine = `ATK ${atk} / DEF ${def} / STAM ${stamina}`;
+  const classes = ['recruit-card'];
+  classes.push(interactive ? 'recruit-card--interactive' : 'recruit-card--readonly');
+  const hint = interactive
+    ? ''
+    : '<div class="recruit-card__hint">상단 “용병 모집” 모달에서 고용 가능합니다.</div>';
+  const action = interactive
+    ? `<button class="btn btn--accent hire" data-modal-action="hire" data-merc-id="${merc.id}">고용하기</button>`
+    : '';
+  return `
+    <li class="${classes.join(' ')}" id="recruit-${merc.id}">
+      <div class="recruit-info">
+        <div class="portrait"><img src="${portrait}" alt="${name}"></div>
+        <div class="recruit-info__body">
+          <div class="recruit-info__name">${name} [${grade}]</div>
+          <div class="recruit-info__meta">계약금 ${signing}G · 임금 ${wage}G</div>
+          <div class="recruit-info__stats">${statsLine}</div>
+          ${hint}
+        </div>
+      </div>
+      ${action}
+    </li>
+  `;
+}
+
+function renderRecruitCards(container, options = {}) {
+  if (!container) {
+    return;
+  }
+  ensureRecruitPool();
+  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+    console.log('HIT:renderRecruitCards', { count: state.recruitPool.length, interactive: Boolean(options.interactive) });
+  }
+  if (!Array.isArray(state.recruitPool) || state.recruitPool.length === 0) {
+    const emptyMessage = options.emptyMessage || '현재 모집 가능한 용병이 없습니다.';
+    container.innerHTML = `<li class="recruit-card recruit-card--empty">${emptyMessage}</li>`;
+    return;
+  }
+  const markup = state.recruitPool.map((merc) => buildRecruitCardMarkup(merc, options)).join('');
+  container.innerHTML = markup;
+}
+
 function renderRecruitPool() {
   const list = elements.recruitList;
   if (!list) {
     return;
   }
-  ensureRecruitPool();
-  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
-    console.log('HIT:renderRecruitPool', { count: state.recruitPool.length });
-  }
-  if (!Array.isArray(state.recruitPool) || state.recruitPool.length === 0) {
-    list.innerHTML = '<li class="recruit-card recruit-card--empty">현재 모집 가능한 용병이 없습니다.</li>';
+  renderRecruitCards(list, {
+    interactive: false,
+    emptyMessage: '모집 가능한 용병이 없습니다. 상단 “용병 모집” 버튼으로 갱신하세요.'
+  });
+}
+
+function renderRecruitModalList() {
+  if (!elements.modalBody || elements.modalBody.dataset.modalType !== 'recruit') {
     return;
   }
-
-  const markup = state.recruitPool
-    .map((merc) => {
-      const portrait = getMercPortraitPath(merc) || 'assets/mercs/m01.jpg';
-      const signing = Math.max(0, Math.round(Number(merc.signing_bonus ?? merc.signing ?? merc.signingBonus) || 0));
-      const grade = merc.grade || 'C';
-      const name = merc.name || '용병';
-      return `
-        <li class="recruit-card" id="recruit-${merc.id}">
-          <div class="recruit-info">
-            <div class="portrait"><img src="${portrait}" alt="${name}"></div>
-            <div class="txt">${name} [${grade}] · 계약금 ${signing}G</div>
-          </div>
-          <button class="btn btn--accent hire" data-action="hire" data-merc-id="${merc.id}">고용하기</button>
-        </li>
-      `;
-    })
-    .join('');
-  list.innerHTML = markup;
+  const list = document.getElementById('recruit-modal-list');
+  if (!list) {
+    return;
+  }
+  renderRecruitCards(list, {
+    interactive: true,
+    emptyMessage: '현재 모집 가능한 용병이 없습니다.'
+  });
 }
 
 function toast(message, options = {}) {
@@ -4277,8 +4455,15 @@ function render() {
   const recruitLocked = CONFIG.RECRUIT_ONCE_PER_TURN && state.lastRecruitTurn === state.turn;
   elements.recruitBtn.disabled = recruitLocked;
   elements.recruitBtn.title = recruitLocked ? '이번 턴에는 이미 용병을 모집했습니다.' : '';
+  if (elements.questBidBtn) {
+    const hasReadyQuest = (Array.isArray(state.quests) ? state.quests : [])
+      .some((quest) => quest && !quest.deleted && quest.status === 'ready');
+    elements.questBidBtn.disabled = !hasReadyQuest;
+    elements.questBidBtn.title = hasReadyQuest ? '' : '입찰 가능한 퀘스트가 없습니다. 턴을 진행해 새 퀘스트를 확인하세요.';
+  }
   renderMercs();
   renderRecruitPool();
+  renderRecruitModalList();
   renderQuestDashboard();
   renderQuests();
   renderCodex();
@@ -5456,8 +5641,10 @@ function renderQuests() {
       runBtn.textContent = '편성하기';
       runBtn.addEventListener('click', () => openQuestAssignModal(quest.id));
     } else {
-      runBtn.textContent = '입찰하기';
-      runBtn.addEventListener('click', () => openQuestAssignModal(quest.id));
+      runBtn.textContent = '수주 대기';
+      runBtn.disabled = true;
+      runBtn.classList.add('btn--disabled');
+      runBtn.title = '상단 “퀘스트 수주” 버튼으로 입찰하세요.';
     }
     actions.appendChild(runBtn);
 
@@ -5827,6 +6014,9 @@ function hideModal(selector) {
 function closeModal() {
   elements.modalOverlay.classList.add('hidden');
   elements.modalBody.innerHTML = '';
+  if (elements.modalBody && elements.modalBody.dataset) {
+    delete elements.modalBody.dataset.modalType;
+  }
   resetModalRequirementSummary();
   currentQuestId = null;
 }
@@ -5851,9 +6041,13 @@ function generateMerc() {
   const modifiers = gradeModifiers[grade];
 
   const name = generateUniqueMercName();
-  const atk = clamp(randomInt(CONFIG.STAT_MIN, CONFIG.STAT_MAX) + modifiers.statBonus, CONFIG.STAT_MIN, CONFIG.STAT_MAX + 3);
-  const def = clamp(randomInt(CONFIG.STAT_MIN, CONFIG.STAT_MAX) + modifiers.statBonus, CONFIG.STAT_MIN, CONFIG.STAT_MAX + 3);
-  const stamina = clamp(randomInt(CONFIG.STAT_MIN, CONFIG.STAT_MAX) + modifiers.statBonus, CONFIG.STAT_MIN, CONFIG.STAT_MAX + 3);
+  const baselineBonus = Math.max(0, Number(CONFIG.MERC_STAT_BONUS) || 0);
+  const baseAtk = clamp(randomInt(CONFIG.STAT_MIN, CONFIG.STAT_MAX) + modifiers.statBonus, CONFIG.STAT_MIN, CONFIG.STAT_MAX + 3);
+  const baseDef = clamp(randomInt(CONFIG.STAT_MIN, CONFIG.STAT_MAX) + modifiers.statBonus, CONFIG.STAT_MIN, CONFIG.STAT_MAX + 3);
+  const baseStamina = clamp(randomInt(CONFIG.STAT_MIN, CONFIG.STAT_MAX) + modifiers.statBonus, CONFIG.STAT_MIN, CONFIG.STAT_MAX + 3);
+  const atk = baseAtk + baselineBonus;
+  const def = baseDef + baselineBonus;
+  const stamina = baseStamina + baselineBonus;
   const statTotal = atk + def + stamina;
   const signing_bonus = calculateMercSigningBonus(statTotal);
   const wage_per_quest = calculateMercWage(statTotal);
