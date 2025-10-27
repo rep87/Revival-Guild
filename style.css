@@ -166,7 +166,16 @@ body.no-bg-asset {
 
 .top-bar__actions {
   display: flex;
+  align-items: center;
   gap: 12px;
+  margin-left: auto;
+}
+
+.top-bar__primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: flex-end;
 }
 
 .btn--ghost {
@@ -551,8 +560,20 @@ body.no-bg-asset {
 
   .top-bar__actions {
     width: 100%;
-    justify-content: flex-start;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .top-bar__primary-actions {
+    width: 100%;
     flex-wrap: wrap;
+    justify-content: stretch;
+    gap: 8px;
+  }
+
+  .top-bar__primary-actions .btn {
+    flex: 1 1 calc(50% - 4px);
   }
 
   .tab-group {
@@ -2263,9 +2284,9 @@ body.no-bg-asset {
 
 .recruit-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
   padding: 14px;
   border-radius: 12px;
   border: 1px solid rgba(221, 186, 110, 0.25);
@@ -2297,6 +2318,132 @@ body.no-bg-asset {
 }
 .recruit-card__body .btn {
   align-self: flex-start;
+}
+
+.recruit-card--interactive {
+  flex-wrap: nowrap;
+}
+
+.recruit-card--interactive .btn {
+  align-self: center;
+}
+
+.recruit-card--readonly {
+  gap: 12px;
+}
+
+.recruit-info__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recruit-info__name {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.recruit-info__meta,
+.recruit-info__stats {
+  font-size: 0.9rem;
+  color: var(--color-text-secondary);
+}
+
+.recruit-card__hint {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  opacity: 0.8;
+}
+
+.recruit-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.recruit-modal__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.recruit-modal__list .recruit-card {
+  margin: 0;
+}
+
+.quest-select {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.quest-select__list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 65vh;
+  overflow-y: auto;
+}
+
+.quest-select__empty {
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(221, 186, 110, 0.25);
+  background: rgba(18, 14, 10, 0.6);
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.quest-select__card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(221, 186, 110, 0.3);
+  background: rgba(18, 14, 10, 0.7);
+  box-shadow: var(--shadow-soft);
+}
+
+.quest-select__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.quest-select__title {
+  font-size: 1.1rem;
+}
+
+.quest-select__badge {
+  font-size: 0.85rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(221, 186, 110, 0.35);
+  background: rgba(221, 186, 110, 0.12);
+}
+
+.quest-select__reward,
+.quest-select__stats,
+.quest-select__info {
+  font-size: 0.95rem;
+  color: var(--color-text-secondary);
+}
+
+.quest-select__stats {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.quest-select__actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .recruit-card__header {
@@ -2493,11 +2640,20 @@ body.no-bg-asset {
 
   .top-bar__actions {
     width: 100%;
-    justify-content: stretch;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
   }
 
-  .top-bar__actions .btn {
-    flex: 1;
+  .top-bar__primary-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: stretch;
+    gap: 8px;
+  }
+
+  .top-bar__primary-actions .btn {
+    flex: 1 1 calc(50% - 4px);
   }
 
   .codex-layout {
@@ -2534,6 +2690,10 @@ body.no-bg-asset {
 
   .panel {
     padding: 16px;
+  }
+
+  .top-bar__primary-actions .btn {
+    flex: 1 1 100%;
   }
 
   .top-bar__resources {
