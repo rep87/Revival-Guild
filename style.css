@@ -2243,6 +2243,45 @@ body.no-bg-asset {
 }
 
 
+.recruit-section {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(221, 186, 110, 0.2);
+  background: rgba(16, 12, 8, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.recruit-section__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.recruit-section__header h4 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.recruit-section__hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+.recruit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .recruit-card {
   display: flex;
   align-items: flex-start;
