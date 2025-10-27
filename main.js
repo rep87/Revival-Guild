@@ -3,7 +3,9 @@
  * Handles state management, UI rendering, and persistence for the mini prototype.
  */
 
-window.__RG_DEBUG = true;
+if (typeof window !== 'undefined' && typeof window.__RG_DEBUG === 'undefined') {
+  window.__RG_DEBUG = false;
+}
 
 const DEBUG_MODE = typeof window !== 'undefined' && window.location.search.includes('debug=1');
 
@@ -3183,30 +3185,36 @@ function createTagRow(attributes = {}, options = {}) {
  * Open the recruit modal with a persistent pool of candidate mercenaries.
  */
 function openRecruit() {
-  if (CONFIG.RECRUIT_ONCE_PER_TURN && state.lastRecruitTurn === state.turn) {
-    toast('이번 턴에는 이미 모집한 용병이 있습니다.');
-    log(`[T${state.turn}] 이번 턴에는 이미 용병 모집을 진행했습니다.`);
-    if (typeof window !== 'undefined' && window.__RG_DEBUG) {
-      console.log('HIT:openRecruit-skipped', { turn: state.turn });
-    }
-    return;
-  }
-
   ensureRecruitPool();
-  if (state.lastRecruitTurn !== state.turn || state.recruitPool.length === 0) {
-    archiveCurrentRecruitPool();
-    state.recruitPool = buildRecruitCandidates();
+  const lockedThisTurn = CONFIG.RECRUIT_ONCE_PER_TURN && state.lastRecruitTurn === state.turn;
+  const shouldReusePool = lockedThisTurn;
+  let generatedNewPool = false;
+
+  if (!shouldReusePool) {
+    const needsNewPool = state.lastRecruitTurn !== state.turn || state.recruitPool.length === 0;
+    if (needsNewPool) {
+      archiveCurrentRecruitPool();
+      state.recruitPool = buildRecruitCandidates();
+      state.lastRecruitTurn = state.turn;
+      persistState();
+      generatedNewPool = true;
+    }
   }
 
   currentRecruitCandidates = state.recruitPool;
-  state.lastRecruitTurn = state.turn;
-  persistState();
   renderRecruitPool();
   showRecruitModal();
   refreshAssetChecklist();
-  toast('모집 목록을 갱신했습니다.');
+
+  const message = generatedNewPool
+    ? '모집 목록을 갱신했습니다.'
+    : state.recruitPool.length > 0
+      ? '이번 턴 모집 후보를 불러왔습니다.'
+      : '이번 턴 모집 후보가 모두 소진되었습니다.';
+  toast(message);
   if (typeof window !== 'undefined' && window.__RG_DEBUG) {
-    console.log('HIT:openRecruit', { turn: state.turn, count: state.recruitPool.length });
+    const mode = generatedNewPool ? 'newPool' : 'reusePool';
+    console.log(`openRecruit: ${mode}`, { turn: state.turn, count: state.recruitPool.length });
   }
 }
 
@@ -3338,7 +3346,7 @@ function handleHireClick(mercId) {
     return;
   }
   if (typeof window !== 'undefined' && window.__RG_DEBUG) {
-    console.log('HIT:handleHireClick', { mercId });
+    console.log('hire: start', { mercId });
   }
   const safeId = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(mercId) : mercId.replace(/"/g, '\\"');
   const btn = document.querySelector(`[data-action="hire"][data-merc-id="${safeId}"]`);
@@ -3390,14 +3398,33 @@ function handleHireClick(mercId) {
   updateCodexEntryFromMerc(hiredMerc, { lastSeenTurn: state.turn });
   state.recruitPool.splice(index, 1);
   currentRecruitCandidates = state.recruitPool;
-  log(`[T${state.turn}] ${candidate.name} [${candidate.grade}] 용병을 고용했습니다. 계약금 ${cost}G 지급.`);
+  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+    console.log('hire: stateUpdated', {
+      mercId,
+      gold: state.gold,
+      mercCount: state.mercs.length,
+      poolCount: state.recruitPool.length
+    });
+  }
   persistState();
+  log(`[T${state.turn}] ${candidate.name} [${candidate.grade}] 용병을 고용했습니다. 계약금 ${cost}G 지급.`);
+  if (btn) {
+    btn.textContent = '고용 완료';
+  }
   renderGold();
   renderMercenaryList();
   renderRecruitPool();
   renderRecruitModalList();
   renderCodex();
   refreshAssetChecklist();
+  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+    console.log('hire: rendered', {
+      mercId,
+      gold: state.gold,
+      mercCount: state.mercs.length,
+      poolCount: state.recruitPool.length
+    });
+  }
   toast(`${candidate.name} 고용 완료!`);
 }
 
@@ -4390,10 +4417,8 @@ function renderRecruitPool() {
   if (!list) {
     return;
   }
-  renderRecruitCards(list, {
-    interactive: false,
-    emptyMessage: '모집 가능한 용병이 없습니다. 상단 “용병 모집” 버튼으로 갱신하세요.'
-  });
+  list.innerHTML = '';
+  list.hidden = true;
 }
 
 function renderRecruitModalList() {
@@ -4452,9 +4477,16 @@ function render() {
   renderCalendar();
   renderQuestSpawnRate();
   renderProbabilityPanel();
-  const recruitLocked = CONFIG.RECRUIT_ONCE_PER_TURN && state.lastRecruitTurn === state.turn;
-  elements.recruitBtn.disabled = recruitLocked;
-  elements.recruitBtn.title = recruitLocked ? '이번 턴에는 이미 용병을 모집했습니다.' : '';
+  if (elements.recruitBtn) {
+    elements.recruitBtn.disabled = false;
+    if (CONFIG.RECRUIT_ONCE_PER_TURN) {
+      elements.recruitBtn.title = state.lastRecruitTurn === state.turn
+        ? '이번 턴 후보는 유지됩니다. 목록 갱신은 턴당 1회입니다.'
+        : '모집 후보 갱신은 턴당 1회입니다.';
+    } else {
+      elements.recruitBtn.title = '';
+    }
+  }
   if (elements.questBidBtn) {
     const hasReadyQuest = (Array.isArray(state.quests) ? state.quests : [])
       .some((quest) => quest && !quest.deleted && quest.status === 'ready');
@@ -4484,6 +4516,9 @@ function renderMercs() {
   if (state.mercs.length === 0) {
     elements.mercList.classList.add('empty-state');
     elements.mercList.textContent = '아직 고용된 용병이 없습니다.';
+    if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+      console.log('guildView: renderMercs', { count: 0 });
+    }
     return;
   }
 
@@ -4545,6 +4580,9 @@ function renderMercs() {
     card.addEventListener('click', () => openMercDetails(merc.id));
     elements.mercList.appendChild(card);
   });
+  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+    console.log('guildView: renderMercs', { count: state.mercs.length });
+  }
 }
 
 function renderCodex() {
@@ -5352,6 +5390,191 @@ function renderQuestDashboard() {
   });
 }
 
+function renderQuests() {
+  elements.questList.innerHTML = '';
+  const quests = Array.isArray(state.quests) ? state.quests : [];
+  const activeQuests = quests
+    .map((quest, index) => ({ quest, index }))
+    .filter(({ quest }) => quest && !quest.deleted && quest.status === 'in_progress');
+
+  if (activeQuests.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = '진행 중인 퀘스트가 없습니다.';
+    elements.questList.appendChild(empty);
+    if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+      console.log('guildView: renderQuests(in_progressOnly)', { count: 0 });
+    }
+    return;
+  }
+
+  activeQuests.forEach(({ quest, index }) => {
+    const card = document.createElement('div');
+    card.className = 'quest-card quest-card--in-progress';
+    const isOverdue = Boolean(quest.overdue);
+    if (isOverdue) {
+      card.classList.add('quest-card--overdue');
+    }
+
+    const header = document.createElement('div');
+    header.className = 'quest-card__header';
+    const title = document.createElement('strong');
+    const tierLabel = quest.tier ? `${quest.tier}급 ` : '';
+    const remainingTurns = Math.max(0, Number(quest.remaining_turns) || 0);
+    title.textContent = `${tierLabel}던전 탐험 (남은 ${remainingTurns}턴)`;
+
+    const headerActions = document.createElement('div');
+    headerActions.className = 'quest-card__header-actions';
+
+    const meta = document.createElement('div');
+    meta.className = 'quest-card__meta';
+
+    const reward = document.createElement('span');
+    reward.textContent = `보상 ${quest.reward}G`;
+    meta.appendChild(reward);
+
+    const importanceBadge = document.createElement('span');
+    importanceBadge.className = `quest-card__importance quest-card__importance--${quest.importance}`;
+    importanceBadge.textContent = `중요도: ${formatImportanceLabel(quest.importance)}`;
+    meta.appendChild(importanceBadge);
+
+    const statusBadge = document.createElement('span');
+    statusBadge.className = 'quest-card__status-badge';
+    statusBadge.textContent = isOverdue ? '기한 초과' : '진행 중';
+    statusBadge.classList.add(isOverdue ? 'quest-card__status-badge--overdue' : 'quest-card__status-badge--active');
+    meta.appendChild(statusBadge);
+
+    if (quest.stance) {
+      const stanceTag = document.createElement('span');
+      stanceTag.className = `quest-card__stance quest-card__stance--${quest.stance}`;
+      stanceTag.textContent = quest.stance === 'on_time' ? '성향: 기한 준수' : '성향: 꼼꼼히 탐색';
+      meta.appendChild(stanceTag);
+    }
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'quest-card__delete-btn';
+    deleteBtn.textContent = '🗑️';
+    deleteBtn.title = '진행 중인 퀘스트는 삭제할 수 없습니다.';
+    deleteBtn.disabled = true;
+    deleteBtn.addEventListener('click', () => deleteQuest(index));
+
+    headerActions.append(meta, deleteBtn);
+    header.append(title, headerActions);
+
+    const stats = document.createElement('div');
+    stats.className = 'quest-card__stats';
+    stats.innerHTML = `<span>소요 ${quest.turns_cost}턴</span><span>유형: ${quest.type}</span>`;
+
+    const recommended = getQuestRecommended(quest);
+    const requirements = document.createElement('div');
+    requirements.className = 'quest-card__requirements';
+    requirements.textContent = `추천 ATK ${recommended.atk} / DEF ${recommended.def} / STAM ${recommended.stam}`;
+
+    const assigned = document.createElement('div');
+    assigned.className = 'quest-card__assigned';
+    const assignedNames = (Array.isArray(quest.assigned_merc_ids) ? quest.assigned_merc_ids : [])
+      .map((id) => state.mercs.find((merc) => merc.id === id))
+      .filter(Boolean)
+      .map((merc) => getMercDisplayName(merc));
+    assigned.textContent = assignedNames.length > 0 ? `투입: ${assignedNames.join(', ')}` : '투입 용병 없음';
+
+    const selectedStats = document.createElement('div');
+    selectedStats.className = 'quest-card__selected-stats';
+    const statsLabel = document.createElement('span');
+    statsLabel.className = 'quest-card__selected-stats-label';
+    statsLabel.textContent = '현재 합계';
+    selectedStats.appendChild(statsLabel);
+
+    const totals = getQuestAssignedTotals(quest);
+    const requirementsMap = { atk: recommended.atk || 0, def: recommended.def || 0, stam: recommended.stam || 0 };
+    [
+      { key: 'atk', label: 'ATK' },
+      { key: 'def', label: 'DEF' },
+      { key: 'stam', label: 'STAM' }
+    ].forEach(({ key, label }) => {
+      const statValue = totals[key] || 0;
+      const requirement = requirementsMap[key] || 0;
+      const stat = document.createElement('span');
+      stat.className = 'quest-card__stat';
+      stat.classList.add(statValue >= requirement ? 'quest-card__stat--ok' : 'quest-card__stat--insufficient');
+      stat.textContent = `${label} ${statValue}`;
+      selectedStats.appendChild(stat);
+    });
+
+    const progressSection = document.createElement('div');
+    progressSection.className = 'quest-card__progress';
+    const progressWrapper = document.createElement('div');
+    progressWrapper.className = 'progress-bar';
+    if (isOverdue) {
+      progressWrapper.classList.add('progress-bar--overdue');
+    }
+    const progressFill = document.createElement('div');
+    progressFill.className = 'progress-bar__fill';
+    const plannedTurns = Math.max(1, Number(quest.turns_cost) || 1);
+    const currentProgress = getQuestProgressValue(quest);
+    const clampedProgress = Math.min(currentProgress, plannedTurns);
+    const progressPercent = Math.max(0, Math.min(100, (clampedProgress / plannedTurns) * 100));
+    progressFill.style.width = `${progressPercent}%`;
+    const progressToken = document.createElement('span');
+    progressToken.className = 'progress-bar__token';
+    progressToken.textContent = '●';
+    const tokenPercent = Math.min(98, Math.max(2, progressPercent));
+    progressToken.style.left = `${tokenPercent}%`;
+    progressWrapper.append(progressFill, progressToken);
+
+    const progressLabel = document.createElement('div');
+    progressLabel.className = 'progress-bar__label';
+    const overdueTurns = Math.max(0, currentProgress - plannedTurns);
+    progressLabel.textContent = overdueTurns > 0
+      ? `진행 ${currentProgress}턴 (기한 초과 +${overdueTurns})`
+      : `진행 ${currentProgress}턴 / 목표 ${plannedTurns}턴`;
+
+    progressSection.append(progressWrapper, progressLabel);
+
+    const bonusLabel = document.createElement('div');
+    bonusLabel.className = 'progress-bar__bonus';
+    bonusLabel.textContent = quest.bonusGold > 0
+      ? `추가 골드 확보 +${quest.bonusGold}G`
+      : '추가 보상 탐색 중';
+    progressSection.appendChild(bonusLabel);
+
+    const journal = document.createElement('div');
+    journal.className = 'quest-card__journal';
+    const recentEntries = Array.isArray(quest.journal) ? quest.journal.slice(-2) : [];
+    if (recentEntries.length === 0) {
+      const emptyEntry = document.createElement('div');
+      emptyEntry.className = 'quest-card__journal-entry';
+      emptyEntry.textContent = '최근 탐험 로그 없음';
+      journal.appendChild(emptyEntry);
+    } else {
+      recentEntries.forEach((entry, entryIndex) => {
+        const line = document.createElement('div');
+        line.className = 'quest-card__journal-entry';
+        const parsed = parseJournalEntry(entry, quest.started_turn, entryIndex);
+        line.textContent = parsed.turn ? `T${parsed.turn} · ${parsed.text}` : parsed.text;
+        journal.appendChild(line);
+      });
+    }
+    progressSection.appendChild(journal);
+
+    const actions = document.createElement('div');
+    actions.className = 'quest-card__actions';
+    const runBtn = document.createElement('button');
+    runBtn.className = 'btn btn--accent';
+    runBtn.textContent = '진행 중';
+    runBtn.disabled = true;
+    actions.appendChild(runBtn);
+
+    card.append(header, stats, requirements, assigned, selectedStats, progressSection, actions);
+    elements.questList.appendChild(card);
+  });
+
+  if (typeof window !== 'undefined' && window.__RG_DEBUG) {
+    console.log('guildView: renderQuests(in_progressOnly)', { count: activeQuests.length });
+  }
+}
+
 /**
  * Build a portrait element that handles missing assets gracefully.
  * @param {Merc} merc
@@ -5396,228 +5619,6 @@ function getMercInitials(name) {
 }
 
 /** Render the quest cards with action buttons. */
-function renderQuests() {
-  elements.questList.innerHTML = '';
-  if (!Array.isArray(state.quests) || state.quests.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    empty.textContent = '턴을 진행해 퀘스트를 생성하세요.';
-    elements.questList.appendChild(empty);
-    return;
-  }
-
-  state.quests.forEach((quest, index) => {
-    if (!quest || quest.deleted || quest.status === 'empty') {
-      const emptyCard = document.createElement('div');
-      emptyCard.className = 'quest-card quest-card--empty';
-      const note = document.createElement('div');
-      note.className = 'quest-card__empty-note';
-      note.innerHTML = `빈 슬롯입니다.<br>턴 진행 시 ${formatSpawnRate()} 확률로 새 퀘스트가 등장합니다.`;
-      emptyCard.appendChild(note);
-      elements.questList.appendChild(emptyCard);
-      return;
-    }
-
-    const card = document.createElement('div');
-    card.className = 'quest-card';
-    const isInProgress = quest.status === 'in_progress';
-    const isBidFailed = quest.status === 'bid_failed';
-    const isAwarded = quest.status === 'awarded';
-    const isOverdue = Boolean(quest.overdue);
-    if (isInProgress) {
-      card.classList.add('quest-card--in-progress');
-    }
-    if (isBidFailed) {
-      card.classList.add('quest-card--bid-failed');
-    }
-    if (isAwarded) {
-      card.classList.add('quest-card--preparing');
-    }
-    if (isOverdue) {
-      card.classList.add('quest-card--overdue');
-    }
-
-    const header = document.createElement('div');
-    header.className = 'quest-card__header';
-    const title = document.createElement('strong');
-    const tierLabel = quest.tier ? `${quest.tier}급 ` : '';
-    if (isInProgress) {
-      const remainingTurns = Math.max(0, Number(quest.remaining_turns) || 0);
-      title.textContent = `${tierLabel}던전 탐험 (남은 ${remainingTurns}턴)`;
-    } else {
-      title.textContent = `${tierLabel}던전 탐험`;
-    }
-
-    const headerActions = document.createElement('div');
-    headerActions.className = 'quest-card__header-actions';
-
-    const meta = document.createElement('div');
-    meta.className = 'quest-card__meta';
-
-    const reward = document.createElement('span');
-    reward.textContent = `보상 ${quest.reward}G`;
-    meta.appendChild(reward);
-
-    const importanceBadge = document.createElement('span');
-    importanceBadge.className = `quest-card__importance quest-card__importance--${quest.importance}`;
-    importanceBadge.textContent = `중요도: ${formatImportanceLabel(quest.importance)}`;
-    meta.appendChild(importanceBadge);
-
-    const statusBadge = document.createElement('span');
-    statusBadge.className = 'quest-card__status-badge';
-    const visibleTurns = Math.max(0, Number(quest.remaining_visible_turns) || 0);
-    if (isInProgress) {
-      statusBadge.textContent = isOverdue ? '기한 초과' : '진행 중';
-      statusBadge.classList.add(isOverdue ? 'quest-card__status-badge--overdue' : 'quest-card__status-badge--active');
-    } else if (isBidFailed) {
-      statusBadge.textContent = '낙찰 실패';
-      statusBadge.classList.add('quest-card__status-badge--failed');
-    } else if (isAwarded) {
-      statusBadge.textContent = '준비 단계';
-      statusBadge.classList.add('quest-card__status-badge--preparing');
-    } else {
-      statusBadge.textContent = `대기 중 (만료까지 ${visibleTurns}턴)`;
-    }
-    meta.appendChild(statusBadge);
-
-    if (isInProgress && quest.stance) {
-      const stanceTag = document.createElement('span');
-      stanceTag.className = `quest-card__stance quest-card__stance--${quest.stance}`;
-      stanceTag.textContent = quest.stance === 'on_time' ? '성향: 기한 준수' : '성향: 꼼꼼히 탐색';
-      meta.appendChild(stanceTag);
-    } else if (isAwarded && quest.pending_stance) {
-      const stanceTag = document.createElement('span');
-      stanceTag.className = `quest-card__stance quest-card__stance--${quest.pending_stance}`;
-      stanceTag.textContent = quest.pending_stance === 'on_time' ? '예정 성향: 기한 준수' : '예정 성향: 꼼꼼히 탐색';
-      meta.appendChild(stanceTag);
-    }
-
-    const deleteBtn = document.createElement('button');
-    deleteBtn.type = 'button';
-    deleteBtn.className = 'quest-card__delete-btn';
-    deleteBtn.textContent = '🗑️';
-    deleteBtn.title = '퀘스트 삭제';
-    deleteBtn.disabled = isInProgress;
-    deleteBtn.addEventListener('click', () => deleteQuest(index));
-
-    headerActions.append(meta, deleteBtn);
-    header.append(title, headerActions);
-
-    const stats = document.createElement('div');
-    stats.className = 'quest-card__stats';
-    stats.innerHTML = `<span>소요 ${quest.turns_cost}턴</span><span>유형: ${quest.type}</span>`;
-
-    const recommended = getQuestRecommended(quest);
-    const requirements = document.createElement('div');
-    requirements.className = 'quest-card__requirements';
-    requirements.textContent = `추천 ATK ${recommended.atk} / DEF ${recommended.def} / STAM ${recommended.stam}`;
-
-    const assigned = document.createElement('div');
-    assigned.className = 'quest-card__assigned';
-    if (isInProgress) {
-      const assignedNames = quest.assigned_merc_ids
-        .map((id) => state.mercs.find((merc) => merc.id === id))
-        .filter(Boolean)
-        .map((merc) => getMercDisplayName(merc));
-      assigned.textContent = assignedNames.length > 0 ? `투입: ${assignedNames.join(', ')}` : '투입 용병 없음';
-    } else if (isAwarded) {
-      const previewIds = Array.isArray(quest.preparation_preview) ? quest.preparation_preview : [];
-      const previewNames = previewIds
-        .map((id) => state.mercs.find((merc) => merc.id === id))
-        .filter(Boolean)
-        .map((merc) => getMercDisplayName(merc));
-      assigned.textContent = previewNames.length > 0
-        ? `모의 파티: ${previewNames.join(', ')}`
-        : '편성 대기: 준비 단계';
-    } else if (!isBidFailed) {
-      assigned.textContent = '입찰 대기: 추천 파티를 가늠하세요';
-    }
-
-    const selectedStats = document.createElement('div');
-    selectedStats.className = 'quest-card__selected-stats';
-    const statsLabel = document.createElement('span');
-    statsLabel.className = 'quest-card__selected-stats-label';
-    statsLabel.textContent = '현재 합계';
-    selectedStats.appendChild(statsLabel);
-
-    const previewTotals = isAwarded
-      ? computeSelectedStats(Array.isArray(quest.preparation_preview) ? quest.preparation_preview : [])
-      : null;
-    const totals = previewTotals || getQuestAssignedTotals(quest);
-    const requirementsMap = { atk: recommended.atk || 0, def: recommended.def || 0, stam: recommended.stam || 0 };
-    [
-      { key: 'atk', label: 'ATK' },
-      { key: 'def', label: 'DEF' },
-      { key: 'stam', label: 'STAM' }
-    ].forEach(({ key, label }) => {
-      const statValue = totals[key] || 0;
-      const requirement = requirementsMap[key] || 0;
-      const stat = document.createElement('span');
-      stat.className = 'quest-card__stat';
-      stat.classList.add(statValue >= requirement ? 'quest-card__stat--ok' : 'quest-card__stat--insufficient');
-      stat.textContent = `${label} ${statValue}`;
-      selectedStats.appendChild(stat);
-    });
-
-    const progressSection = document.createElement('div');
-    progressSection.className = 'quest-card__progress';
-    const progressWrapper = document.createElement('div');
-    progressWrapper.className = 'progress-bar';
-    if (isOverdue) {
-      progressWrapper.classList.add('progress-bar--overdue');
-    }
-    const progressFill = document.createElement('div');
-    progressFill.className = 'progress-bar__fill';
-    const plannedTurns = Math.max(1, Number(quest.turns_cost) || 1);
-    const currentProgress = getQuestProgressValue(quest);
-    const clampedProgress = Math.min(currentProgress, plannedTurns);
-    const progressPercent = Math.max(0, Math.min(100, (clampedProgress / plannedTurns) * 100));
-    progressFill.style.width = `${progressPercent}%`;
-    const progressToken = document.createElement('span');
-    progressToken.className = 'progress-bar__token';
-    progressToken.textContent = '●';
-    const tokenPercent = Math.min(98, Math.max(2, progressPercent));
-    progressToken.style.left = `${tokenPercent}%`;
-    progressWrapper.append(progressFill, progressToken);
-
-    const progressLabel = document.createElement('div');
-    progressLabel.className = 'progress-bar__label';
-    if (isInProgress) {
-      const overdueTurns = Math.max(0, currentProgress - plannedTurns);
-      progressLabel.textContent = overdueTurns > 0
-        ? `진행 ${currentProgress}턴 (기한 초과 +${overdueTurns})`
-        : `진행 ${currentProgress}턴 / 목표 ${plannedTurns}턴`;
-    } else if (isBidFailed) {
-      progressLabel.textContent = '낙찰 실패 - 진행 불가';
-    } else if (isAwarded) {
-      progressLabel.textContent = '준비 단계 · 편성 확정 대기';
-    } else {
-      progressLabel.textContent = `입찰 대기 · 예상 ${plannedTurns}턴`;
-    }
-
-    progressSection.append(progressWrapper, progressLabel);
-
-    if (isInProgress) {
-      const bonusLabel = document.createElement('div');
-      bonusLabel.className = 'progress-bar__bonus';
-      bonusLabel.textContent = quest.bonusGold > 0
-        ? `추가 골드 확보 +${quest.bonusGold}G`
-        : '추가 보상 탐색 중';
-      progressSection.appendChild(bonusLabel);
-
-      const journal = document.createElement('div');
-      journal.className = 'quest-card__journal';
-      const recentEntries = Array.isArray(quest.journal) ? quest.journal.slice(-2) : [];
-      if (recentEntries.length === 0) {
-        const emptyEntry = document.createElement('div');
-        emptyEntry.className = 'quest-card__journal-entry';
-        emptyEntry.textContent = '최근 탐험 로그 없음';
-        journal.appendChild(emptyEntry);
-      } else {
-        recentEntries.forEach((entry, index) => {
-          const line = document.createElement('div');
-          line.className = 'quest-card__journal-entry';
-          const parsed = parseJournalEntry(entry, quest.started_turn, index);
           line.textContent = parsed.turn ? `T${parsed.turn} · ${parsed.text}` : parsed.text;
           journal.appendChild(line);
         });
