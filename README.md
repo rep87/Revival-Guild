@@ -1,185 +1,64 @@
 # Revival Guild
 
-## 프로젝트 개요
-- 다키스트 던전형 경영 로그라이크: 플레이어는 길드를 운영하고, 파티는 자동으로 던전을 탐험합니다.
-- 상단 주요 액션(용병 모집/퀘스트 수주/턴 진행/새 게임)은 헤더 우측에 정렬되어 빠르게 접근할 수 있습니다.
-- Hiring is immediate (roster & codex update, recruit cards disappear at once, duplicate hires are blocked).
-- Bids resolve against rival guilds via softmax weighting with a steep overbid penalty and a single winner.
-- Formation works only for awarded quests and launches expeditions immediately after confirmation.
-- Portraits use assets/mercs/m01~m10.jpg.
+> **TL;DR (EN):** A browser-game prototype about running a mercenary guild and recording what happens to individual characters over time.
+> What worked: hiring, dispatch, weekly results, resources, and chronicle-style records could be implemented quickly.
+> What still needs human judgment: visual storytelling, character attachment, event variety, and the difference between stored records and felt narrative. (as of 2026-04, using Codex)
 
-## 빠른 시작
-- GitHub Pages: [https://rep87.github.io/Revival-Guild/](https://rep87.github.io/Revival-Guild/)
-- 로컬 미리보기: 저장소를 클론한 뒤 `index.html`을 브라우저로 열거나 간단한 정적 서버(`npx serve` 등)를 실행하세요.
+`Revival Guild` is an AI-assisted browser-game concept experiment, not a finished management game.
 
-## 조작법
-- 용병 모집: 상단의 **용병 모집** 버튼을 눌러 전용 모달에서 후보를 확인하고 고용합니다. 고용 즉시 보유 목록과 도감에 반영되며, 카드가 목록에서 제거되고 중복 고용이 차단됩니다.
-- 퀘스트 수주: 상단 **퀘스트 수주** 버튼으로 입찰 전용 모달을 열어 입찰 가능한 퀘스트를 선택합니다. 길드 관리 탭에서는 편성 단계만 진행할 수 있습니다.
-- 준비 단계: 낙찰 후에는 **편성하기** 버튼으로 전담 편성 모달을 열어 실제 파티와 탐험 성향을 확정합니다.
-- 턴 진행: **턴 진행** 버튼으로 시간 경과와 신규 퀘스트 생성을 처리합니다.
-- 삭제: 완료되었거나 필요 없는 퀘스트는 카드 우측의 삭제 버튼으로 정리합니다.
+## What This Tested
 
-## 탐험 성향
-- 퀘스트 시작 전 `꼼꼼히 탐색` 또는 `기한 준수` 성향을 선택할 수 있습니다.
-- **꼼꼼히 탐색**: 보너스 골드 발견 확률이 높지만 기한 초과 위험과 평판 페널티가 늘어납니다.
-- **기한 준수**: 기한을 지킬 확률이 높지만 추가 보상은 낮습니다.
-- 성향은 저장되며 진행 중인 탐험의 이벤트 로그, 보너스 골드, 평판 증감량(성향 계수 적용)에 반영됩니다.
+Many games treat low-rarity characters as disposable parts. This project tested the opposite idea:
 
-## 탐험 시각화
-- 진행 중인 퀘스트 카드 하단에 진행바와 파티 토큰(●)이 표시되어 턴마다 이동합니다.
-- 최근 탐험 로그 1~2줄과 누적 보너스 골드를 확인할 수 있습니다.
-- 변경 사항이 보이지 않을 경우 하드 리로드로 캐시를 갱신하세요.
-  - Windows/Linux: <kbd>Ctrl</kbd>+<kbd>F5</kbd> 또는 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>
-  - macOS: <kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>
+> Can even weak or low-grade mercenaries gain meaning through the history of a guild?
 
-## 퀘스트 타임라인 & 캠프
-- 등급별 턴 수가 세분화되어 S 8~12턴 / A 7~10턴 / B 6~8턴 / C 4~6턴 / D 3~5턴으로 진행 리듬을 조절합니다.
-- 6턴을 초과하는 퀘스트는 진행 중 한 차례 **캠프 이벤트**가 생성되어 타임라인과 로그에 기록됩니다.
-- 매 턴 탐험 로그가 `trap·fight·chest·boss·camp·story` animKey를 포함한 이벤트로 누적되며, 완료 모달에서 타임라인 형태로 확인할 수 있습니다.
-- 완료 시 길드 평판 구간에 따라 1줄짜리 귀환 일화가 생성되어 완료 모달과 용병 일지에 공유됩니다.
-- 캠프 이벤트와 귀환 일화는 다수의 서사 템플릿 중 무작위로 선택되어 반복 없는 연출을 제공합니다.
-- 신규 퀘스트는 `QUEST_CONFIG.spawnRate`(현재 60%) 확률로 등장하며, 보상은 `ECON` 계수 기반의 정비례 공식을 따릅니다.
+The player is closer to a guildmaster than an action hero. Mercenaries are hired, sent on contracts, injured, remembered, and ideally become part of the guild's accumulated time.
 
-## 평판 밴드 & 등장 확률
-- 길드 평판 스케일이 **0~1000**으로 확장되었고, 구간별 라벨과 등장 분포가 새롭게 정의되었습니다.
-- 상단 헤더에서는 현재 평판과 밴드 라벨, 그리고 ±50씩 조정하는 디버그 버튼([▲][▼])을 바로 확인할 수 있습니다.
-- `길드 관리 → 확률표` 서브탭에서 현재 밴드 기준의 퀘스트/용병 등급 분포를 확인하고 다른 밴드 미리보기로 비교할 수 있습니다.
+## What Worked
 
-### 평판 밴드
-| 키 | 범위 | 라벨 |
-| --- | --- | --- |
-| low | 0–199 | 알려지지 않음 |
-| mid1 | 200–499 | 지역에 알려짐 |
-| mid2 | 500–799 | 국가에 알려짐 |
-| high | 800–899 | 대륙에 알려짐 |
-| top | 900–1000 | 전세계에 알려짐 |
+- Mercenary hiring
+- Party/assignment flow
+- Contract dispatch
+- Weekly progress
+- Result text
+- Gold/renown/resource changes
+- Chronicle and save structure
+- Browser-local playable loop
 
-### 퀘스트 등급 분포 (임시 기본값)
-| 밴드 | S | A | B | C | D |
-| --- | --- | --- | --- | --- | --- |
-| 알려지지 않음 | 0% | 2% | 18% | 55% | 25% |
-| 지역에 알려짐 | 2% | 10% | 30% | 45% | 13% |
-| 국가에 알려짐 | 5% | 18% | 38% | 34% | 5% |
-| 대륙에 알려짐 | 9% | 22% | 40% | 26% | 3% |
-| 전세계에 알려짐 | 16% | 28% | 38% | 16% | 2% |
+This confirmed that an AI coding agent can build the rules and record structure for a small management game quickly.
 
-### 용병 등급 분포 (임시 기본값)
-| 밴드 | S | A | B | C | D |
-| --- | --- | --- | --- | --- | --- |
-| 알려지지 않음 | 0% | 1% | 10% | 39% | 50% |
-| 지역에 알려짐 | 1% | 6% | 22% | 46% | 25% |
-| 국가에 알려짐 | 3% | 12% | 33% | 41% | 11% |
-| 대륙에 알려짐 | 6% | 18% | 38% | 33% | 5% |
-| 전세계에 알려짐 | 10% | 24% | 40% | 23% | 3% |
+## What Did Not Work Yet
 
-## 정비례 경제 공식
-- 용병 계약금과 임금은 능력치 합계(ATK+DEF+STAM)에 각각 6.0, 2.0 계수를 곱하고 ±10% 변동을 적용해 산출합니다.
-- 던전 퀘스트 보상은 `40 × tierCoef × (0.75 + 0.12×턴수) × randVar(±10%)` 공식을 사용합니다.
-  - tierCoef는 `S 1.8 / A 1.4 / B 1.1 / C 0.8 / D 0.5`를 사용합니다.
-- 평판 증감은 밴드별 기본값(`S 12 / A 8 / B 5 / C 3 / D 2`)을 기반으로 성향·기한 페널티가 가중됩니다.
+(2026-04, Codex 기준) records existed, but records alone did not become story.
 
-## 감정 로그 & 휴식 시스템
-- 용병은 임무 투입 여부에 따라 피로도, 관계도, 벤치 체류율 수치가 매 턴 갱신됩니다.
-- 피로 ≥ 60, 벤치 ≥ 80, 관계 ≥ 75 상태의 용병은 감정 로그가 자동으로 생성되어 로그 패널에 표시됩니다.
-- 카드 배지와 상세 모달에서 세 수치를 확인할 수 있으며, 감정 변화는 용병 연대기에도 누적됩니다.
+The prototype needed stronger visual cues, character faces, equipment/state changes, regional differences, events, and a clearer feeling that time had passed. Without those, the game still felt close to a text web game even when the data model had the right direction.
 
-## 용병 카드 & 고유 이름
-- 신규 용병은 `FIRST_NAMES × CLAN_NAMES` 조합과 희귀 접미사/숫자 태그를 활용해 **중복 없이** 생성됩니다.
-- 생성된 신규 용병은 테스트 편의를 위해 ATK/DEF/STAM 각각 +10 보정을 받고 등장합니다.
-- 사용된 이름은 `state.meta.usedNames`에 저장되어 세션을 이어도 동일 이름이 재사용되지 않습니다.
-- 리스트 카드는 이름·등급·임금만 표시하고, 스킬/장비 슬롯 자리만 회색 플레이스홀더로 확보했습니다.
-- 임무 중인 용병은 카드 우상단에 🔒 배지가 표시되며, 클릭 시 상세 정보 모달을 열 수 있습니다.
-- 카드 중단에 🔥/🤝/💤 배지가 추가되어 피로도·관계도·벤치 체류율을 한눈에 확인할 수 있으며, 툴팁으로 0~100 수치를 제공합니다.
-- 상세 모달에서 기본 정보(등급/레벨/나이/임금/계약금), 능력치, 스킬/장비 플레이스홀더, 최근 10건 연대기 로그를 확인할 수 있습니다.
-- 모집 카드에는 네임드/마을 출신/재방문 배지가 추가되어 특별한 인재를 즉시 구분할 수 있으며, 각각 ★/🏘/↺ 아이콘으로 표기됩니다.
+## Main Lesson
 
-## 용병 도감
-- 메인 패널 상단 탭에 **용병도감**이 추가되어 지금까지 만난 용병을 한곳에서 관리할 수 있습니다.
-- 도감은 고용 시 즉시 등록되며, 퀘스트 완료와 동시에 배정된 용병의 완료 횟수와 최근 본 턴이 갱신됩니다.
-- 리스트는 이름/등급/상태/첫 만남/최근 본 턴/완료 퀘스트/관계/메모 요약 열을 제공하며, 검색창과 등급·상태 필터로 빠르게 탐색할 수 있습니다.
-- 행을 클릭하면 우측 상세 패널이 열려 기본 정보, 관계 수치, 첫 만남 기록, 최근 활동 연대기(최대 10건)와 플레이어 메모를 확인할 수 있습니다.
-- 플레이어 메모는 줄바꿈 없는 500자 제한으로 즉시 저장되며, 요약이 표에도 반영됩니다.
-- 네임드·마을 출신 용병은 모집 목록에서 사라져도 10턴의 재등장 쿨다운을 거쳐 다시 후보군에 자동 편입됩니다.
-- 도감은 **계약 완료 시점**에만 등록되며, 로드시 기존 버전에서 남은 미고용 데이터는 정비 루틴으로 제거됩니다.
-- 네임드·마을 출신·재방문 용병은 목록과 상세 패널에서 배지(★/🏘/↺)로 표시되고, 상세 정보에 재방문 횟수와 재등장 히스토리가 추가되었습니다.
-- 리스트 검색·필터는 유지되지만 표시 대상은 항상 고용 이력이 있는 용병으로 고정됩니다.
-- 상태 필드는 현재 `현역/은퇴/사망/이탈` 네 가지 스텁을 지원하며, 향후 이벤트 연동을 위한 자리표시자입니다.
-- 상태 표시는 아이콘으로도 병기되어 `● 현역 / 🏳 은퇴 / ✝ 사망 / ↩ 이탈` 순서로 노출됩니다.
-- 도감 데이터는 `state.codex`에 저장되어 새로고침 후에도 관계/연대기/메모가 유지됩니다.
+Accumulated data is not automatically narrative.
 
-## 확률 기반 입찰 시스템
-- 기존 최저가 선착순 대신 **Softmax 기반 확률 입찰**을 도입했습니다.
-- 퀘스트 중요도(`gold`/`reputation`/`stats`)에 따라 입찰가·능력치·평판 가중치가 달라집니다.
-- 플레이어와 라이벌이 같은 모델로 경쟁하며, 추첨 결과는 단 한 길드만 낙찰됩니다.
-- 경쟁 길드의 평판(`rival.rep`)과 우리 길드 평판의 비율이 낙찰 확률에 반영됩니다.
-- 기본 보상 대비 과다 입찰(2~4배 이상)을 시도할수록 낙찰 가중치가 급격히 줄어듭니다.
-- 디버그 탭의 **확률 프리뷰** 토글(또는 URL 뒤 `?debug=1` 파라미터)을 활성화하면 입찰 제출 모달에서 `Player 42% / ...` 형식의 낙찰 확률을 확인할 수 있습니다.
+If the goal is attachment, the system needs visible characters, meaningful events, and interfaces that make the player feel the cost of choosing efficiency over memory.
 
-## 입찰 → 준비 → 파견 흐름
-1. **입찰 단계**
-   - 모든 퀘스트는 `quest.recommended`(ATK/DEF/STAM) 값을 노출하며, 부족해도 입찰을 제출할 수 있습니다.
-   - 입찰 모달 우측에는 고정된 **파티 가늠(모의)** 패널이 표시되어, 가용 용병 체크박스를 토글하면 합계와 색상(충족=녹색, 부족=적색)이 즉시 갱신됩니다.
-   - 추천치 대비 합산 비율로 산출한 `예상 난이도` 배지가 함께 갱신되어, 입찰 전 성공 가능성을 가늠할 수 있습니다.
-2. **준비 단계**
-   - 플레이어가 낙찰되면 퀘스트 상태가 `preparing`으로 전환되고, 카드/대시보드에 "준비 단계" 배지가 노출됩니다.
-   - 이 단계에서는 실제 편성을 확정하지 않으며, 미리 선택한 용병과 예정 성향은 `quest.preparation_preview`/`quest.pending_stance`로 저장되어 참고용으로 유지됩니다.
-   - **편성하기** 모달에서 다시 용병을 선택하면 추천 능력치와 현재 합계가 색상 강조로 비교되며, 낙찰 시점의 메모가 그대로 이어집니다.
-3. **파견 및 보정**
-   - 편성 확정 후 실제 합계(`sumStats`)와 추천 합계(`recTotal`)의 비율은 `overRatio = clamp((sum-rec)/rec, -0.6, 1.2)`로 계산됩니다.
-   - `CONFIG.PREP_BAL`(기본값: `successBase 0.78`, `successPerOver 0.10`, `expeditePerOver 0.20`, `delayPerUnder 0.25`)을 참조해 턴마다 성공/조기 완료/지연 확률이 조정됩니다.
-     - 과잉 편성(오버캡)은 최대 +10%p 성공 보너스와 20% 조기 완료 확률(1턴 단축)을 제공합니다.
-     - 부족 편성(언더캡)은 지연 확률이 최대 25%까지 상승하고, 실패 시 임금 지출·평판 페널티가 발생합니다.
-   - 지연/조기 완료 결과는 `quest.preparationResult`에 누적되어 완료 로그와 리포트에 "준비 보정" 요약으로 표기됩니다.
+## Related Collection
 
-## 디버그 탭
-- Missing Assets 안내, 확률 프리뷰 토글, CONFIG 덤프, 수동 저장/로드 버튼을 모아 개발용 정보를 한 곳에서 확인할 수 있습니다.
-- CONFIG 덤프는 버튼을 눌러 펼치며, 현재 실행 중인 설정값(`SPAWN_TABLE`, `ECON`, `REPUTATION`)을 JSON 포맷으로 보여줍니다.
-- 수동 저장/로드 버튼으로 테스트용 상태를 바로 보관하거나 복원할 수 있습니다.
+This project is part of:
 
-## 라이벌 정보 가시성
-- 길드 본부 레벨(Stub)마다 라이벌 입찰 정보가 단계적으로 공개됩니다.
-  - **Lv.1**: 라이벌 섹션이 `???`로 표시됩니다.
-  - **Lv.2**: 범위/히트맵형 힌트만 노출됩니다.
-  - **Lv.3**: 실제 입찰가와 낙찰 확률이 정확히 표시됩니다.
-- 현재 프로토타입은 Lv.1 고정이며, UI 분기만 구현되어 있습니다.
+[AI Game Prototyping Experiments](https://github.com/rep87/ai-game-prototyping-experiments)
 
-## 창고 & 재화 드롭
-- 퀘스트 완료 시 15% 확률로 재화 아이템이 드롭되며, **창고 → 재화** 탭에서 확인할 수 있습니다.
-- 드롭은 모두 재화형 아이템으로만 생성되며, **판매** 버튼으로 즉시 골드화할 수 있습니다.
-- 장비/퀘소 탭은 향후 확장을 위해 비어 있으며, **착용** 버튼은 비활성 상태로 남겨두었습니다.
-- 드롭·판매 내역은 자동으로 저장되며, 기존 세이브 데이터와도 호환됩니다.
+## Run Locally
 
-## 레이아웃 & 배경 연출
-- 화면이 중앙 집중형에서 **사이드 도킹형 패널** 구조로 변경되어 배경이 더 넓게 드러납니다.
-- 상단에는 `용병 | 퀘스트 | 확률표 | 용병도감 | 창고 | 디버그` 탭이 배치되어 관리/점검 화면을 빠르게 전환할 수 있습니다.
-- 퀘스트 탭의 상단에는 **진행 중 퀘스트 대시보드**가 추가되어 남은 턴, 성향, 보너스, 투입 인원을 한눈에 확인할 수 있습니다.
-- 디버그 탭으로 개발용 정보(Missing Assets, 확률 프리뷰 토글, CONFIG, 수동 저장/로드)를 분리했습니다.
-- 전체 배경 위에 라디얼 스크림과 반투명 패널이 적용되어 게임 보드 느낌을 살렸습니다.
-- 헤더의 **배경 강조** 버튼을 누르면 패널 투명도가 낮아져 배경 일러스트를 감상할 수 있습니다.
+```powershell
+python -m http.server 4176
+```
 
-## 시간 시스템
-- 1턴 = 1개월이며 `CONFIG.START_YEAR`, `CONFIG.START_MONTH`를 기준으로 진행됩니다.
-- 상단 바에 `길드력 YY년 MM월`이 표시되어 현재 월을 즉시 파악할 수 있습니다.
+Then open:
 
-## 보드 공정식 박스
-- 화면 오른쪽 하단의 📌 버튼을 눌러 경제·평판·낙찰 계산식을 펼쳐볼 수 있습니다.
-- 버튼 상태는 토글되며, 디버깅 시 참고용 공식이 작은 글씨로 정리되어 있습니다.
+```text
+http://127.0.0.1:4176/index.html
+```
 
-## 저장 및 초기화
-- 모든 진행 상황은 `localStorage`의 `rg_v1_save` 키에 저장되며, `meta.saveVersion = 5` 필드로 버전 호환성을 관리합니다. 기존 0~100 평판 값은 로드시 자동으로 0~1000 스케일로 보정되며, 누락된 `quest.recommended`/`preparation_preview`/`pending_stance`/`preparationResult` 필드는 로드시 기본값으로 보강됩니다.
-- 저장 데이터에는 길드/라이벌 평판, 퀘스트 중요도·성향·진행도·보너스 골드·낙찰 확률, 용병 감정 수치 및 일지, 이벤트 타임라인(캠프 포함)이 모두 직렬화되어 재접속 후에도 상태가 유지됩니다.
-- 새롭게 추가된 `state.codex`에는 용병 도감 정보(첫 만남, 최근 본 턴, 완료 퀘스트 수, 관계, 플레이어 메모)가 포함됩니다.
-- `state.meta.hireHistory`에는 고용이 완료된 용병 id가 누적되며, `state.pool.namedArchive`에는 재등장 대기 중인 네임드/마을 출신 용병 정보가 저장되어 새로고침 후에도 재방문 일정이 유지됩니다.
-- 상단 헤더의 **새 게임** 버튼을 누르면 확인 모달이 뜨며, 승인 시 저장 데이터를 삭제하고 상태를 재초기화한 뒤 첫 진입 로그까지 출력합니다.
-- 하드 리로드로도 초기화 가능합니다.
-  - Windows/Linux: <kbd>Ctrl</kbd>+<kbd>F5</kbd> 또는 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>
-  - macOS: <kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>
+## Status
 
-## 아트 에셋 가이드
-- 모든 이미지는 `assets/` 하위 경로 규칙을 따릅니다. 예) 배경 `assets/bg/`, 용병 초상 `assets/mercs/{id}.jpg`, 던전 썸네일 `assets/monsters/`.
-- 해당 경로에 파일이 없으면 UI에서 플레이스홀더 이미지와 안내 문구가 표시됩니다.
-- 디버그 탭의 **Missing Assets** 패널에서 누락된 파일 목록과 업로드 위치를 확인할 수 있습니다.
-
-## 로드맵 요약
-- Phase-2.1 이후 예정: 라이벌 밸런싱 조정, 던전 미니 리포트 및 탐험 애니메이션 추가.
-- 이번에 추가된 이벤트 타임라인 animKey는 차후 실시간 애니메이션 시스템과 연결해 컷씬/전투 연출을 재생하는 훅으로 사용할 예정입니다.
+- Prototype / concept experiment
+- Not a finished game
+- Code sync is not being changed in this README-only update
